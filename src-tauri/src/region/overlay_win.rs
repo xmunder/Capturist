@@ -7,17 +7,17 @@ mod win {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
     use windows::Win32::Graphics::Gdi::{
-        BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, FrameRect, GetStockObject,
-        InvalidateRect, BLACK_BRUSH, HBRUSH, PAINTSTRUCT,
+        BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, FrameRect, InvalidateRect,
+        HBRUSH, PAINTSTRUCT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
         GetMessageW, GetSystemMetrics, LoadCursorW, RegisterClassW, SetCursor, SetForegroundWindow,
-        SetLayeredWindowAttributes, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HMENU,
-        IDC_CROSS, LWA_ALPHA, LWA_COLORKEY, MSG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOW, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
-        WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_LAYERED,
-        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+        SetLayeredWindowAttributes, ShowWindow, TranslateMessage, HMENU, IDC_CROSS, LWA_ALPHA,
+        LWA_COLORKEY, MSG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+        SM_YVIRTUALSCREEN, SW_SHOW, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+        WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+        WS_EX_TOPMOST, WS_POPUP,
     };
 
     use crate::capture::models::Region;
@@ -26,6 +26,7 @@ mod win {
     const OVERLAY_DIM_ALPHA: u8 = 120;
     const OVERLAY_COLOR: COLORREF = COLORREF(0x00000000);
     const SELECTION_HOLE_COLOR: COLORREF = COLORREF(0x00030201);
+    const SELECTION_BORDER_THICKNESS_PX: i32 = 2;
 
     #[derive(Default, Copy, Clone)]
     struct State {
@@ -57,15 +58,46 @@ mod win {
     }
 
     fn has_area(rect: &RECT) -> bool {
-        rect.right != rect.left && rect.bottom != rect.top
+        rect.right > rect.left && rect.bottom > rect.top
     }
 
     fn same_rect(a: &RECT, b: &RECT) -> bool {
         a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom
     }
 
+    fn rect_intersection(a: &RECT, b: &RECT) -> Option<RECT> {
+        let left = a.left.max(b.left);
+        let top = a.top.max(b.top);
+        let right = a.right.min(b.right);
+        let bottom = a.bottom.min(b.bottom);
+        let intersection = RECT {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        if has_area(&intersection) {
+            Some(intersection)
+        } else {
+            None
+        }
+    }
+
+    fn expand_rect(rect: RECT, padding: i32) -> RECT {
+        RECT {
+            left: rect.left - padding,
+            top: rect.top - padding,
+            right: rect.right + padding,
+            bottom: rect.bottom + padding,
+        }
+    }
+
     unsafe fn request_repaint(hwnd: HWND) {
-        let _ = InvalidateRect(Some(hwnd), None, true);
+        let _ = InvalidateRect(Some(hwnd), None, false);
+    }
+
+    unsafe fn request_repaint_rect(hwnd: HWND, rect: &RECT) {
+        let _ = InvalidateRect(Some(hwnd), Some(rect), false);
     }
 
     unsafe fn paint_overlay(hwnd: HWND) {
@@ -76,12 +108,17 @@ mod win {
             return;
         }
 
-        let mut client = RECT::default();
-        let _ = GetClientRect(hwnd, &mut client);
+        let mut client_rect = RECT::default();
+        let _ = GetClientRect(hwnd, &mut client_rect);
+        let paint_rect = if has_area(&ps.rcPaint) {
+            ps.rcPaint
+        } else {
+            client_rect
+        };
 
         let base_brush = CreateSolidBrush(OVERLAY_COLOR);
         if !base_brush.0.is_null() {
-            let _ = FillRect(hdc, &client, base_brush);
+            let _ = FillRect(hdc, &paint_rect, base_brush);
             let _ = DeleteObject(base_brush.into());
         }
 
@@ -95,20 +132,25 @@ mod win {
             // fuera de la selección queda oscurecido y dentro se ve el contenido real.
             let hole_brush = CreateSolidBrush(SELECTION_HOLE_COLOR);
             if !hole_brush.0.is_null() {
-                let _ = FillRect(hdc, &selection, hole_brush);
+                if let Some(hole_region) = rect_intersection(&selection, &paint_rect) {
+                    let _ = FillRect(hdc, &hole_region, hole_brush);
+                }
                 let _ = DeleteObject(hole_brush.into());
             }
 
             let border_brush = CreateSolidBrush(COLORREF(0x00FFFFFF));
             if !border_brush.0.is_null() {
-                let mut inner = selection;
-                let _ = FrameRect(hdc, &selection, border_brush);
-                if inner.right - inner.left > 2 && inner.bottom - inner.top > 2 {
-                    inner.left += 1;
-                    inner.top += 1;
-                    inner.right -= 1;
-                    inner.bottom -= 1;
-                    let _ = FrameRect(hdc, &inner, border_brush);
+                let border_bounds = expand_rect(selection, SELECTION_BORDER_THICKNESS_PX);
+                if rect_intersection(&border_bounds, &paint_rect).is_some() {
+                    let mut inner = selection;
+                    let _ = FrameRect(hdc, &selection, border_brush);
+                    if inner.right - inner.left > 2 && inner.bottom - inner.top > 2 {
+                        inner.left += 1;
+                        inner.top += 1;
+                        inner.right -= 1;
+                        inner.bottom -= 1;
+                        let _ = FrameRect(hdc, &inner, border_brush);
+                    }
                 }
                 let _ = DeleteObject(border_brush.into());
             }
@@ -131,16 +173,28 @@ mod win {
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {
-                let mut s = state().lock().expect("estado overlay poisoned");
-                if s.selecting {
-                    s.current.x = (l.0 & 0xFFFF) as i16 as i32;
-                    s.current.y = ((l.0 >> 16) & 0xFFFF) as i16 as i32;
-                    let old_rect = s.rect;
-                    update_rect(&mut s);
-                    if same_rect(&old_rect, &s.rect) {
-                        return LRESULT(0);
+                let mut dirty_old = None;
+                let mut dirty_new = None;
+                {
+                    let mut s = state().lock().expect("estado overlay poisoned");
+                    if s.selecting {
+                        s.current.x = (l.0 & 0xFFFF) as i16 as i32;
+                        s.current.y = ((l.0 >> 16) & 0xFFFF) as i16 as i32;
+                        let old_rect = s.rect;
+                        update_rect(&mut s);
+                        if same_rect(&old_rect, &s.rect) {
+                            return LRESULT(0);
+                        }
+                        let dirty_padding = SELECTION_BORDER_THICKNESS_PX + 1;
+                        dirty_old = Some(expand_rect(old_rect, dirty_padding));
+                        dirty_new = Some(expand_rect(s.rect, dirty_padding));
                     }
-                    request_repaint(hwnd);
+                }
+                if let Some(old_rect) = dirty_old {
+                    request_repaint_rect(hwnd, &old_rect);
+                }
+                if let Some(new_rect) = dirty_new {
+                    request_repaint_rect(hwnd, &new_rect);
                 }
                 LRESULT(0)
             }
@@ -190,10 +244,9 @@ mod win {
 
             let class_name: Vec<u16> = "RegionOverlay".encode_utf16().chain([0]).collect();
             let wc = WNDCLASSW {
-                style: CS_HREDRAW | CS_VREDRAW,
                 lpfnWndProc: Some(wnd_proc),
                 hCursor: LoadCursorW(None, IDC_CROSS).unwrap_or_default(),
-                hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+                hbrBackground: HBRUSH::default(),
                 lpszClassName: PCWSTR(class_name.as_ptr()),
                 ..Default::default()
             };
