@@ -8,6 +8,9 @@ Actualmente el proyecto incluye:
 
 - Captura de pantalla con `windows-capture` (monitores y ventanas).
 - Encoder de video con `ffmpeg-the-third`.
+- Pipeline de video desacoplado (`captura -> cola acotada -> worker de encode`) con backpressure.
+- Ingesta de frames con `row_stride` real para evitar normalización extra de padding en CPU.
+- Modo de ingestión GPU (`ID3D11Texture2D`) cuando se fuerza `NVENC/AMF/QSV` sin crop.
 - Captura de audio WASAPI (sistema y micrófono) + mux final con FFmpeg CLI.
 - Selección de región nativa en Windows (`select_region_native`).
 - Atajos globales con emisión de evento al frontend (`global-shortcut-triggered`).
@@ -27,6 +30,8 @@ Documento de contrato:
 - Infraestructura:
   - `ScreenProvider` con `windows-capture`.
   - `FrameConsumer` con `ffmpeg-the-third`.
+  - Worker dedicado de codificación de video para evitar bloquear el callback de captura.
+  - Ruta opcional de frame por textura D3D11 para reducir copia CPU en captura.
   - audio WASAPI + mux final con FFmpeg.
 
 ## Requisitos
@@ -83,6 +88,8 @@ Variables importantes:
 - `ARTIFACTS_DIR` (default: `./artifacts`)
 - `RUN_XWIN_CHECK=1|0`
 - `RUN_FRONTEND_BUILD=1|0`
+- `MOVE_EXE_TO_WINDOWS_DESKTOP=1|0` (default `0`)
+- `WINDOWS_DESKTOP_DIR=/mnt/c/Users/<tu-usuario>/Desktop` (opcional; si no se define, el script intenta detectarla automáticamente en WSL)
 
 Ejemplos:
 
@@ -112,6 +119,8 @@ Detalle y checklist:
 - Plataforma objetivo: Windows (x86_64).
 - Atajos globales nativos: disponibles en Windows.
 - En Linux/WSL el comando `set_global_shortcuts` devuelve error esperado de plataforma.
+- El path de ingestión D3D11 directo a encoder es experimental y está deshabilitado por defecto.
+  Si quieres habilitarlo manualmente: `CAPTURIST_EXPERIMENTAL_D3D11_INPUT=1`.
 
 ## Pendientes de cierre
 

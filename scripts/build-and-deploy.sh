@@ -33,6 +33,8 @@ FFMPEG_DIR="${FFMPEG_DIR:-$ROOT_DIR/ffmpeg-windows}"
 FFMPEG_LICENSE_FILE="$FFMPEG_DIR/LICENSE.txt"
 RUN_XWIN_CHECK="${RUN_XWIN_CHECK:-1}"
 RUN_FRONTEND_BUILD="${RUN_FRONTEND_BUILD:-1}"
+MOVE_EXE_TO_WINDOWS_DESKTOP="${MOVE_EXE_TO_WINDOWS_DESKTOP:-0}"
+WINDOWS_DESKTOP_DIR="${WINDOWS_DESKTOP_DIR:-}"
 
 REQUIRED_LIBS=(avcodec avformat avutil swscale swresample avdevice avfilter)
 REQUIRED_DLLS=(avcodec avformat avutil swscale swresample avdevice avfilter)
@@ -47,6 +49,43 @@ case "$PACKAGE_MODE" in
     exit 1
     ;;
 esac
+
+if [[ "$MOVE_EXE_TO_WINDOWS_DESKTOP" != "0" && "$MOVE_EXE_TO_WINDOWS_DESKTOP" != "1" ]]; then
+  error "MOVE_EXE_TO_WINDOWS_DESKTOP invalido: '$MOVE_EXE_TO_WINDOWS_DESKTOP' (usar 0 o 1)"
+  exit 1
+fi
+
+detect_windows_desktop_dir() {
+  local detected=""
+
+  if command -v powershell.exe >/dev/null 2>&1 && command -v wslpath >/dev/null 2>&1; then
+    local win_desktop
+    win_desktop="$(powershell.exe -NoProfile -Command "[Environment]::GetFolderPath('Desktop')" 2>/dev/null | tr -d '\r\n')"
+    if [[ -n "$win_desktop" ]]; then
+      detected="$(wslpath -u "$win_desktop" 2>/dev/null || true)"
+    fi
+  fi
+
+  echo "$detected"
+}
+
+if [[ "$MOVE_EXE_TO_WINDOWS_DESKTOP" == "1" ]]; then
+  if [[ -z "$WINDOWS_DESKTOP_DIR" ]]; then
+    WINDOWS_DESKTOP_DIR="$(detect_windows_desktop_dir)"
+    if [[ -z "$WINDOWS_DESKTOP_DIR" ]]; then
+      error "No se pudo detectar el escritorio de Windows automaticamente."
+      error "Define WINDOWS_DESKTOP_DIR, por ejemplo: /mnt/c/Users/<usuario>/Desktop"
+      exit 1
+    fi
+  fi
+
+  if [[ ! -d "$WINDOWS_DESKTOP_DIR" ]]; then
+    error "WINDOWS_DESKTOP_DIR no existe o no es carpeta: $WINDOWS_DESKTOP_DIR"
+    exit 1
+  fi
+
+  info "WINDOWS_DESKTOP_DIR=$WINDOWS_DESKTOP_DIR"
+fi
 
 for cmd in pnpm cargo cargo-xwin realpath; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
@@ -263,6 +302,31 @@ copy_installer_artifact() {
   info "Instalador copiado en: $installer_output_dir/$(basename "$installer_path")"
 }
 
+move_exes_to_windows_desktop() {
+  local source_dir="$1"
+
+  if [[ "$MOVE_EXE_TO_WINDOWS_DESKTOP" != "1" ]]; then
+    return 0
+  fi
+
+  local exe_paths=()
+  while IFS= read -r exe_path; do
+    exe_paths+=("$exe_path")
+  done < <(find "$source_dir" -type f -name '*.exe' ! -name 'ffmpeg.exe' | sort)
+
+  if [[ "${#exe_paths[@]}" -eq 0 ]]; then
+    warn "No se encontraron .exe para mover al escritorio en: $source_dir"
+    return 0
+  fi
+
+  info "Se moveran ${#exe_paths[@]} archivo(s) .exe al escritorio"
+  for exe_path in "${exe_paths[@]}"; do
+    local desktop_target="$WINDOWS_DESKTOP_DIR/$(basename "$exe_path")"
+    mv -f "$exe_path" "$desktop_target"
+    info "EXE movido al escritorio: $desktop_target"
+  done
+}
+
 phase "FASE 6: EMPAQUETADO Y COPIA DE ARTEFACTOS"
 
 build_stamp="$(date +%Y%m%d_%H%M%S)"
@@ -282,6 +346,8 @@ if [[ "$PACKAGE_MODE" == "installer" || "$PACKAGE_MODE" == "both" ]]; then
   copy_installer_artifact "$output_dir/installer"
 fi
 
+move_exes_to_windows_desktop "$output_dir"
+
 phase "RESUMEN"
 info "Build completado."
 info "Artefactos en: $output_dir"
@@ -290,4 +356,7 @@ if [[ "$PACKAGE_MODE" == "installer" || "$PACKAGE_MODE" == "both" ]]; then
 fi
 if [[ "$PACKAGE_MODE" == "portable" || "$PACKAGE_MODE" == "both" ]]; then
   info "Portable:  $output_dir/portable/$APP_NAME"
+fi
+if [[ "$MOVE_EXE_TO_WINDOWS_DESKTOP" == "1" ]]; then
+  info "EXE movido(s) a: $WINDOWS_DESKTOP_DIR"
 fi
