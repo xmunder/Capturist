@@ -249,10 +249,15 @@ export function useRecorderController() {
       ? `${customWidth}x${customHeight}`
       : RESOLUTION_LABELS[resolutionChoice];
   const elapsedLabel = formatElapsed(elapsedMs);
-  const codecLabel =
-    codec === "auto" && activeVideoEncoderLabel
-      ? `Auto (${activeVideoEncoderLabel})`
-      : formatCodec(codec);
+  const codecLabel = (() => {
+    if (activeVideoEncoderLabel) {
+      if (codec === "auto") {
+        return `Auto (${activeVideoEncoderLabel})`;
+      }
+      return activeVideoEncoderLabel;
+    }
+    return formatCodec(codec);
+  })();
   const statusLabel = STATUS_LABELS[status];
   const effectiveSystemAudioEnabled = isRecording
     ? recordingAudioStatus.captureSystemAudio

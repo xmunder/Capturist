@@ -17,9 +17,7 @@ use crate::{
             QualityMode, VideoCodec, VideoEncoderPreference,
         },
         processing_status::{is_processing, set_processing},
-        video_encoder_status::{
-            get_live_video_encoder_label, infer_label_from_preference, set_live_video_encoder_label,
-        },
+        video_encoder_status::{get_live_video_encoder_label, set_live_video_encoder_label},
     },
     region,
     shortcuts::ShortcutBindings,
@@ -203,11 +201,10 @@ pub fn start_recording(
 
     encoder_config.validate()?;
 
-    let preferred_encoder_label =
-        infer_label_from_preference(&encoder_config.video_encoder_preference);
-
     apply_audio_capture_config(&encoder_config.audio);
-    set_live_video_encoder_label(preferred_encoder_label);
+    // La etiqueta del backend debe reflejar el encoder realmente abierto,
+    // no solo la preferencia seleccionada por el usuario.
+    set_live_video_encoder_label(None);
     set_processing(false);
 
     let session_config = SessionConfig {
