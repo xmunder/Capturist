@@ -17,6 +17,7 @@ Actualmente el proyecto incluye:
 Documento de contrato:
 
 - [docs/contract-matrix.md](docs/contract-matrix.md)
+- [docs/license-compliance.md](docs/license-compliance.md)
 
 ## Arquitectura
 
@@ -95,6 +96,17 @@ Salida esperada:
 - `artifacts/<timestamp>/installer/` (si aplica)
 - `artifacts/<timestamp>/portable/<app>/` (si aplica)
 
+## Licencias y compliance
+
+- El bundle local `ffmpeg-windows/` incluye `LICENSE.txt` (GPLv3).
+- Inspeccion local de `ffmpeg.exe` muestra build con `--enable-gpl`, `--enable-version3`, `--enable-libx264` y `--enable-libx265`.
+- En esta build inspeccionada no se detecta `--enable-nonfree`.
+- El pipeline `scripts/build-and-deploy.sh` valida la presencia de `ffmpeg-windows/LICENSE.txt` y lo empaqueta en portable/installer.
+
+Detalle y checklist:
+
+- [docs/license-compliance.md](docs/license-compliance.md)
+
 ## Notas operativas
 
 - Plataforma objetivo: Windows (x86_64).
@@ -105,4 +117,4 @@ Salida esperada:
 
 - Validación manual completa en Windows 10/11 (con y sin GPU).
 - Matriz final de encoder en hardware real: NVENC, AMF, QSV, CPU fallback.
-- Más cobertura de tests en módulos de audio/region/shortcuts.
+- Evidencia por release del binario FFmpeg usado (`ffmpeg -version` + `ffmpeg -buildconf`) y revision legal final previa a distribucion publica.

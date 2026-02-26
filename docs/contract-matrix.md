@@ -18,7 +18,7 @@ Este documento fija el contrato entre frontend y backend para la etapa inicial e
 | `stop_recording` | `{}` | `void` | Finaliza sesión y vuelve a `idle`. |
 | `cancel_recording` | `{}` | `void` | Alias de `stop_recording`. |
 | `get_recording_status` | `{}` | `CaptureManagerSnapshot` | Snapshot para polling UI. |
-| `select_region_native` | `{}` | `CropRegion \| null` | Placeholder actual: retorna `null`. |
+| `select_region_native` | `{}` | `CropRegion \| null` | En Windows abre overlay nativo y retorna region o `null` si se cancela. En no-Windows devuelve error de plataforma. |
 
 ## Modelos principales
 
@@ -48,4 +48,5 @@ Transiciones válidas:
 - El contrato está operativo y compatible en nombres de comandos/payloads.
 - Descubrimiento de targets (`get_targets`) ya usa backend `windows-capture` en Windows.
 - Captura continua de frames ya corre con `windows-capture` en thread dedicado.
-- Encoder real (`ffmpeg-the-third`) y salida final de archivo quedan para los siguientes hitos.
+- Encoder real (`ffmpeg-the-third`) ya integrado con salida final de archivo.
+- Audio WASAPI (sistema/microfono) y mux final con FFmpeg CLI ya integrados.
