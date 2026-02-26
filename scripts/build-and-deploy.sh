@@ -30,6 +30,7 @@ TARGET="${TARGET:-x86_64-pc-windows-msvc}"
 PACKAGE_MODE="${PACKAGE_MODE:-installer}" # installer | portable | both
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$ROOT_DIR/artifacts}"
 FFMPEG_DIR="${FFMPEG_DIR:-$ROOT_DIR/ffmpeg-windows}"
+FFMPEG_LICENSE_FILE="$FFMPEG_DIR/LICENSE.txt"
 RUN_XWIN_CHECK="${RUN_XWIN_CHECK:-1}"
 RUN_FRONTEND_BUILD="${RUN_FRONTEND_BUILD:-1}"
 
@@ -103,6 +104,11 @@ if [[ ! -f "$FFMPEG_DIR/bin/ffmpeg.exe" ]]; then
   MISSING=1
 fi
 
+if [[ ! -f "$FFMPEG_LICENSE_FILE" ]]; then
+  error "Falta licencia FFmpeg: LICENSE.txt"
+  MISSING=1
+fi
+
 if [[ "$MISSING" -eq 1 ]]; then
   error "Validacion FFmpeg fallida."
   exit 1
@@ -128,7 +134,9 @@ info "FFMPEG_DIR=$FFMPEG_DIR"
 create_tauri_overlay_config() {
   local overlay_file="$1"
   local ffmpeg_bin_rel
+  local ffmpeg_license_rel
   ffmpeg_bin_rel="$(realpath --relative-to "$ROOT_DIR/src-tauri" "$FFMPEG_DIR/bin")"
+  ffmpeg_license_rel="$(realpath --relative-to "$ROOT_DIR/src-tauri" "$FFMPEG_LICENSE_FILE")"
 
   cat >"$overlay_file" <<JSON
 {
@@ -142,7 +150,8 @@ create_tauri_overlay_config() {
       "${ffmpeg_bin_rel}/avformat-*.dll": "",
       "${ffmpeg_bin_rel}/avutil-*.dll": "",
       "${ffmpeg_bin_rel}/swresample-*.dll": "",
-      "${ffmpeg_bin_rel}/swscale-*.dll": ""
+      "${ffmpeg_bin_rel}/swscale-*.dll": "",
+      "${ffmpeg_license_rel}": "THIRD_PARTY_LICENSES/FFMPEG-GPLv3.txt"
     }
   }
 }
@@ -211,10 +220,13 @@ resolve_release_exe() {
 copy_portable_artifacts() {
   local exe_path="$1"
   local portable_dir="$2/$APP_NAME"
+  local portable_licenses_dir="$portable_dir/THIRD_PARTY_LICENSES"
 
   mkdir -p "$portable_dir"
+  mkdir -p "$portable_licenses_dir"
   cp "$exe_path" "$portable_dir/$APP_EXE_NAME"
   cp "$FFMPEG_DIR/bin/ffmpeg.exe" "$portable_dir/"
+  cp "$FFMPEG_LICENSE_FILE" "$portable_licenses_dir/FFMPEG-GPLv3.txt"
 
   shopt -s nullglob
   for dll in "${REQUIRED_DLLS[@]}"; do
