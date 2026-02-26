@@ -247,3 +247,87 @@ impl Default for EncoderConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AudioCaptureConfig, EncoderConfig, OutputFormat, OutputResolution, VideoCodec,
+        VideoEncoderPreference,
+    };
+
+    #[test]
+    fn audio_config_is_enabled_si_hay_fuente_activa() {
+        let system_enabled = AudioCaptureConfig {
+            capture_system_audio: true,
+            ..AudioCaptureConfig::default()
+        };
+        assert!(system_enabled.is_enabled());
+
+        let mic_enabled = AudioCaptureConfig {
+            capture_microphone_audio: true,
+            ..AudioCaptureConfig::default()
+        };
+        assert!(mic_enabled.is_enabled());
+
+        let disabled = AudioCaptureConfig::default();
+        assert!(!disabled.is_enabled());
+    }
+
+    #[test]
+    fn validate_rechaza_fps_fuera_de_rango() {
+        let config = EncoderConfig {
+            fps: 0,
+            ..EncoderConfig::default()
+        };
+
+        let err = config
+            .validate()
+            .expect_err("debio fallar por fps invalido");
+        assert!(err.contains("FPS inválido"));
+    }
+
+    #[test]
+    fn validate_rechaza_ganancia_de_microfono_fuera_de_rango() {
+        let config = EncoderConfig {
+            audio: AudioCaptureConfig {
+                microphone_gain_percent: 401,
+                ..AudioCaptureConfig::default()
+            },
+            ..EncoderConfig::default()
+        };
+
+        let err = config
+            .validate()
+            .expect_err("debio fallar por ganancia de microfono invalida");
+        assert!(err.contains("Ganancia de micrófono inválida"));
+    }
+
+    #[test]
+    fn validate_rechaza_webm_con_codec_no_vp9() {
+        let config = EncoderConfig {
+            format: OutputFormat::WebM,
+            codec: Some(VideoCodec::H264),
+            video_encoder_preference: VideoEncoderPreference::Auto,
+            ..EncoderConfig::default()
+        };
+
+        let err = config
+            .validate()
+            .expect_err("debio fallar por codec incompatible en webm");
+        assert!(err.contains("WebM solo es compatible"));
+    }
+
+    #[test]
+    fn validate_acepta_configuracion_valida() {
+        let config = EncoderConfig {
+            format: OutputFormat::Mp4,
+            resolution: OutputResolution::Custom {
+                width: 1920,
+                height: 1080,
+            },
+            ..EncoderConfig::default()
+        };
+
+        assert!(config.validate().is_ok());
+    }
+}

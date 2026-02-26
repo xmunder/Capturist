@@ -35,3 +35,34 @@ pub fn is_processing() -> bool {
 pub fn set_processing(value: bool) {
     processing_override_flag().store(value, Ordering::SeqCst);
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Mutex, OnceLock};
+
+    use super::{is_processing, set_processing, ProcessingGuard};
+
+    fn test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn processing_guard_y_override_controlan_estado() {
+        let _guard = test_lock().lock().expect("lock de test poisoned");
+
+        set_processing(false);
+        assert!(!is_processing());
+
+        {
+            let _processing_guard = ProcessingGuard::start();
+            assert!(is_processing());
+        }
+        assert!(!is_processing());
+
+        set_processing(true);
+        assert!(is_processing());
+        set_processing(false);
+        assert!(!is_processing());
+    }
+}

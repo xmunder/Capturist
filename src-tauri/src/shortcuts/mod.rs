@@ -27,6 +27,8 @@ impl GlobalShortcutManager {
     }
 
     pub fn update(&self, bindings: ShortcutBindings) -> Result<(), String> {
+        validate_bindings_shape(&bindings)?;
+
         let (ack_tx, ack_rx) = std::sync::mpsc::channel();
         self.tx
             .send(PlatformCommand::Update(bindings, ack_tx))
@@ -50,6 +52,30 @@ enum PlatformCommand {
         std::sync::mpsc::Sender<Result<(), String>>,
     ),
     Shutdown,
+}
+
+fn validate_bindings_shape(bindings: &ShortcutBindings) -> Result<(), String> {
+    use std::collections::HashSet;
+
+    let shortcuts = [
+        bindings.start.trim(),
+        bindings.pause_resume.trim(),
+        bindings.stop.trim(),
+    ];
+
+    if shortcuts.iter().any(|value| value.is_empty()) {
+        return Err("Todos los atajos deben tener una combinación válida".to_string());
+    }
+
+    let mut dedup = HashSet::new();
+    for value in shortcuts {
+        let normalized = value.to_ascii_lowercase();
+        if !dedup.insert(normalized) {
+            return Err("Cada acción debe tener un atajo distinto".to_string());
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -392,4 +418,45 @@ fn parse_virtual_key(token: &str) -> Result<u32, String> {
     };
 
     Ok(vk)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_bindings_shape, ShortcutBindings};
+
+    #[test]
+    fn valida_atajos_distintos_y_no_vacios() {
+        let bindings = ShortcutBindings {
+            start: "Ctrl+Alt+R".to_string(),
+            pause_resume: "Ctrl+Alt+P".to_string(),
+            stop: "Ctrl+Alt+S".to_string(),
+        };
+
+        assert!(validate_bindings_shape(&bindings).is_ok());
+    }
+
+    #[test]
+    fn rechaza_atajos_vacios() {
+        let bindings = ShortcutBindings {
+            start: " ".to_string(),
+            pause_resume: "Ctrl+Alt+P".to_string(),
+            stop: "Ctrl+Alt+S".to_string(),
+        };
+
+        let err = validate_bindings_shape(&bindings).expect_err("debio fallar por atajo vacio");
+        assert!(err.contains("combinación válida"));
+    }
+
+    #[test]
+    fn rechaza_atajos_duplicados_sin_importar_mayusculas() {
+        let bindings = ShortcutBindings {
+            start: "Ctrl+Alt+R".to_string(),
+            pause_resume: "ctrl+alt+r".to_string(),
+            stop: "Ctrl+Alt+S".to_string(),
+        };
+
+        let err =
+            validate_bindings_shape(&bindings).expect_err("debio fallar por atajos duplicados");
+        assert!(err.contains("atajo distinto"));
+    }
 }
