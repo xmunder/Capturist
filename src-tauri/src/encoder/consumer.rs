@@ -1,7 +1,10 @@
 #[cfg(target_os = "windows")]
 mod platform {
+    use std::{ffi::c_void, ptr};
+
     use ffmpeg_the_third::{
         codec::{self, encoder},
+        ffi,
         format::{self, flag::Flags, Pixel},
         frame, packet,
         software::scaling::{self, Flags as ScaleFlags},
@@ -16,22 +19,37 @@ mod platform {
         video_encoder_status::set_live_video_encoder_label,
     };
 
+    enum VideoInputPipeline {
+        Cpu {
+            scaler: scaling::Context,
+            src_frame: frame::Video,
+            dst_frame: frame::Video,
+        },
+        GpuTextureD3d11,
+    }
+
     struct EncoderContext {
         output_ctx: format::context::Output,
         video_enc: encoder::Video,
-        scaler: scaling::Context,
+        input_pipeline: VideoInputPipeline,
         stream_idx: usize,
         time_base: Rational,
         first_timestamp_ms: Option<u64>,
         last_pts: i64,
-        src_frame: frame::Video,
-        dst_frame: frame::Video,
     }
 
     pub struct FfmpegEncoderConsumer {
         config: EncoderConfig,
         ctx: Option<EncoderContext>,
         audio_capture: Option<AudioCaptureService>,
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct VideoEncoderCapabilities {
+        pub nvenc: bool,
+        pub amf: bool,
+        pub qsv: bool,
+        pub software: bool,
     }
 
     // FFmpeg mantiene estado interno no thread-safe; este consumer se usa con exclusión mutua.
@@ -69,7 +87,7 @@ mod platform {
             }
 
             if self.ctx.is_none() {
-                self.initialize(frame.width, frame.height)?;
+                self.initialize(&frame)?;
             }
 
             self.encode_frame(frame)
@@ -79,7 +97,11 @@ mod platform {
             self.finalize()
         }
 
-        fn initialize(&mut self, frame_width: u32, frame_height: u32) -> Result<(), String> {
+        fn initialize(&mut self, frame: &RawFrame) -> Result<(), String> {
+            let frame_width = frame.width;
+            let frame_height = frame.height;
+            let gpu_surface_only = frame.has_gpu_texture() && !frame.has_cpu_data();
+
             let (codec_kind, allow_fallback) = match &self.config.codec {
                 Some(codec) => (codec.clone(), false),
                 None => (self.config.format.default_codec(), true),
@@ -115,7 +137,15 @@ mod platform {
                 &codec_kind,
                 allow_fallback,
                 &self.config.video_encoder_preference,
+                gpu_surface_only,
             );
+            if candidates.is_empty() {
+                return Err(format!(
+                    "No hay encoders compatibles para el modo de entrada {} con codec {:?}",
+                    if gpu_surface_only { "GPU" } else { "CPU" },
+                    codec_kind
+                ));
+            }
 
             let mut selected_encoder_name: Option<&'static str> = None;
             let mut selected_codec = None;
@@ -143,7 +173,11 @@ mod platform {
 
                         candidate_enc.set_width(out_w);
                         candidate_enc.set_height(out_h);
-                        candidate_enc.set_format(Pixel::YUV420P);
+                        candidate_enc.set_format(if gpu_surface_only {
+                            Pixel::D3D11
+                        } else {
+                            Pixel::YUV420P
+                        });
                         candidate_enc.set_time_base(time_base);
                         candidate_enc
                             .set_frame_rate(Some(Rational::new(self.config.fps as i32, 1)));
@@ -199,8 +233,16 @@ mod platform {
 
             let found_codec = selected_codec.expect("codec seleccionado ausente");
             let video_enc = selected_video_enc.expect("encoder seleccionado ausente");
+            let backend_label = selected_backend_label(encoder_name);
+            if gpu_surface_only && backend_label == "CPU" {
+                return Err(
+                    "El modo GPU de textura D3D11 requiere un encoder de hardware (NVENC/AMF/QSV)"
+                        .to_string(),
+                );
+            }
 
-            set_live_video_encoder_label(Some(selected_backend_label(encoder_name).to_string()));
+            let live_codec_label = selected_codec_label(&codec_kind);
+            set_live_video_encoder_label(Some(format!("{backend_label} / {live_codec_label}")));
 
             let mut stream = output_ctx
                 .add_stream(found_codec)
@@ -216,36 +258,43 @@ mod platform {
                 .write_header()
                 .map_err(|err| format!("No se pudo escribir cabecera del contenedor: {err}"))?;
 
-            let scale_flags = match self.config.quality_mode {
-                QualityMode::Performance => ScaleFlags::FAST_BILINEAR,
-                QualityMode::Balanced => ScaleFlags::BILINEAR,
-                QualityMode::Quality => ScaleFlags::BICUBIC,
+            let input_pipeline = if gpu_surface_only {
+                VideoInputPipeline::GpuTextureD3d11
+            } else {
+                let scale_flags = match self.config.quality_mode {
+                    QualityMode::Performance => ScaleFlags::FAST_BILINEAR,
+                    QualityMode::Balanced => ScaleFlags::BILINEAR,
+                    QualityMode::Quality => ScaleFlags::BICUBIC,
+                };
+
+                let scaler = scaling::Context::get(
+                    Pixel::BGRA,
+                    frame_width,
+                    frame_height,
+                    Pixel::YUV420P,
+                    out_w,
+                    out_h,
+                    scale_flags,
+                )
+                .map_err(|err| format!("No se pudo crear el escalador de color: {err}"))?;
+                let src_frame = frame::Video::new(Pixel::BGRA, frame_width, frame_height);
+                let dst_frame = frame::Video::new(Pixel::YUV420P, out_w, out_h);
+
+                VideoInputPipeline::Cpu {
+                    scaler,
+                    src_frame,
+                    dst_frame,
+                }
             };
-
-            let scaler = scaling::Context::get(
-                Pixel::BGRA,
-                frame_width,
-                frame_height,
-                Pixel::YUV420P,
-                out_w,
-                out_h,
-                scale_flags,
-            )
-            .map_err(|err| format!("No se pudo crear el escalador de color: {err}"))?;
-
-            let src_frame = frame::Video::new(Pixel::BGRA, frame_width, frame_height);
-            let dst_frame = frame::Video::new(Pixel::YUV420P, out_w, out_h);
 
             self.ctx = Some(EncoderContext {
                 output_ctx,
                 video_enc,
-                scaler,
+                input_pipeline,
                 stream_idx,
                 time_base,
                 first_timestamp_ms: None,
                 last_pts: -1,
-                src_frame,
-                dst_frame,
             });
 
             self.audio_capture
@@ -266,6 +315,26 @@ mod platform {
 
             match codec {
                 VideoCodec::H264 | VideoCodec::H265 => {
+                    if encoder_name.contains("nvenc") {
+                        let preset = match self.config.quality_mode {
+                            QualityMode::Performance => "p4",
+                            QualityMode::Balanced => "p5",
+                            QualityMode::Quality => "p6",
+                        };
+
+                        let nvenc_cq = match self.config.quality_mode {
+                            QualityMode::Performance => self.config.crf.saturating_add(4).min(35),
+                            QualityMode::Balanced => self.config.crf.min(32),
+                            QualityMode::Quality => self.config.crf.saturating_sub(2).max(14),
+                        };
+
+                        options.set("preset", preset);
+                        options.set("rc", "vbr");
+                        options.set("cq", &nvenc_cq.to_string());
+                        options.set("b:v", "0");
+                        has_options = true;
+                    }
+
                     if encoder_name.starts_with("libx26") {
                         options.set("crf", &self.config.crf.to_string());
                         options.set("preset", self.config.preset.as_str());
@@ -287,6 +356,10 @@ mod platform {
                         && matches!(self.config.quality_mode, QualityMode::Performance)
                     {
                         options.set("low_power", "1");
+                        has_options = true;
+                    } else if encoder_name.contains("_qsv") {
+                        let qsv_quality = self.config.crf.min(40);
+                        options.set("global_quality", &qsv_quality.to_string());
                         has_options = true;
                     }
                 }
@@ -310,27 +383,88 @@ mod platform {
                 .as_mut()
                 .ok_or_else(|| "El encoder no fue inicializado".to_string())?;
 
-            let src_frame = &mut ctx.src_frame;
-            let dst_frame = &mut ctx.dst_frame;
-
-            let stride = (frame.width * 4) as usize;
-            let dst_stride = src_frame.stride(0);
-            let dst_data = src_frame.data_mut(0);
-            if dst_stride == stride && frame.data.len() <= dst_data.len() {
-                dst_data[..frame.data.len()].copy_from_slice(&frame.data);
-            } else {
-                for (row_idx, row_chunk) in frame.data.chunks(stride).enumerate() {
-                    let dst_offset = row_idx * dst_stride;
-                    if dst_offset + row_chunk.len() <= dst_data.len() {
-                        dst_data[dst_offset..dst_offset + row_chunk.len()]
-                            .copy_from_slice(row_chunk);
+            match &mut ctx.input_pipeline {
+                VideoInputPipeline::Cpu {
+                    scaler,
+                    src_frame,
+                    dst_frame,
+                } => {
+                    if !frame.has_cpu_data() || !frame.is_cpu_layout_valid() {
+                        return Err("Frame inválido para pipeline CPU (BGRA)".to_string());
                     }
+
+                    let row_bytes = (frame.width.saturating_mul(4)) as usize;
+                    let src_stride = frame.row_stride_bytes as usize;
+                    let dst_stride = src_frame.stride(0);
+                    let dst_data = src_frame.data_mut(0);
+
+                    let rows = frame.height as usize;
+                    let min_input_size = rows.saturating_mul(src_stride);
+                    if frame.data.len() < min_input_size {
+                        return Err(format!(
+                            "Buffer de frame incompleto: {} < {}",
+                            frame.data.len(),
+                            min_input_size
+                        ));
+                    }
+
+                    let contiguous_copy_size = rows.saturating_mul(row_bytes);
+                    if src_stride == row_bytes
+                        && dst_stride == row_bytes
+                        && contiguous_copy_size <= dst_data.len()
+                    {
+                        dst_data[..contiguous_copy_size]
+                            .copy_from_slice(&frame.data[..contiguous_copy_size]);
+                    } else {
+                        for row_idx in 0..rows {
+                            let src_offset = row_idx.saturating_mul(src_stride);
+                            let dst_offset = row_idx * dst_stride;
+                            if dst_offset + row_bytes > dst_data.len() {
+                                break;
+                            }
+                            let src_slice = &frame.data[src_offset..src_offset + row_bytes];
+                            dst_data[dst_offset..dst_offset + row_bytes].copy_from_slice(src_slice);
+                        }
+                    }
+
+                    scaler
+                        .run(src_frame, dst_frame)
+                        .map_err(|err| format!("Error en conversión de color: {err}"))?;
+
+                    let first_ts = *ctx.first_timestamp_ms.get_or_insert(frame.timestamp_ms);
+                    let rel_ts_ms = frame.timestamp_ms.saturating_sub(first_ts) as i64;
+                    let pts = if rel_ts_ms <= ctx.last_pts {
+                        ctx.last_pts + 1
+                    } else {
+                        rel_ts_ms
+                    };
+                    dst_frame.set_pts(Some(pts));
+                    ctx.last_pts = pts;
+
+                    ctx.video_enc
+                        .send_frame(dst_frame)
+                        .map_err(|err| format!("Error enviando frame al encoder: {err}"))?;
+                }
+                VideoInputPipeline::GpuTextureD3d11 => {
+                    Self::encode_gpu_texture_frame(ctx, frame)?;
                 }
             }
 
-            ctx.scaler
-                .run(src_frame, dst_frame)
-                .map_err(|err| format!("Error en conversión de color: {err}"))?;
+            self.drain_packets()
+        }
+
+        fn encode_gpu_texture_frame(
+            ctx: &mut EncoderContext,
+            mut frame: RawFrame,
+        ) -> Result<(), String> {
+            let texture_ptr = frame
+                .take_gpu_texture_ptr()
+                .ok_or_else(|| "Frame GPU recibido sin textura D3D11".to_string())?;
+
+            let mut hw_frame = frame::Video::empty();
+            hw_frame.set_format(Pixel::D3D11);
+            hw_frame.set_width(frame.width);
+            hw_frame.set_height(frame.height);
 
             let first_ts = *ctx.first_timestamp_ms.get_or_insert(frame.timestamp_ms);
             let rel_ts_ms = frame.timestamp_ms.saturating_sub(first_ts) as i64;
@@ -339,14 +473,39 @@ mod platform {
             } else {
                 rel_ts_ms
             };
-            dst_frame.set_pts(Some(pts));
+            hw_frame.set_pts(Some(pts));
             ctx.last_pts = pts;
 
-            ctx.video_enc
-                .send_frame(dst_frame)
-                .map_err(|err| format!("Error enviando frame al encoder: {err}"))?;
+            unsafe {
+                let av_frame = hw_frame.as_mut_ptr();
 
-            self.drain_packets()
+                (*av_frame).data[0] = texture_ptr as *mut u8;
+                (*av_frame).data[1] = ptr::null_mut();
+
+                let texture_buf = ffi::av_buffer_create(
+                    texture_ptr as *mut u8,
+                    1,
+                    Some(release_d3d11_texture_buffer),
+                    texture_ptr as *mut c_void,
+                    0,
+                );
+                if texture_buf.is_null() {
+                    release_d3d11_texture_buffer(
+                        texture_ptr as *mut c_void,
+                        texture_ptr as *mut u8,
+                    );
+                    return Err(
+                        "No se pudo crear AVBufferRef para textura D3D11 del frame".to_string()
+                    );
+                }
+                (*av_frame).buf[0] = texture_buf;
+            }
+
+            ctx.video_enc
+                .send_frame(&hw_frame)
+                .map_err(|err| format!("Error enviando frame GPU al encoder: {err}"))?;
+
+            Ok(())
         }
 
         fn drain_packets(&mut self) -> Result<(), String> {
@@ -423,6 +582,7 @@ mod platform {
         codec: &VideoCodec,
         allow_fallback: bool,
         preference: &VideoEncoderPreference,
+        gpu_surface_only: bool,
     ) -> Vec<&'static str> {
         let push_unique = |list: &mut Vec<&'static str>, candidate: &'static str| {
             if !list.contains(&candidate) {
@@ -456,10 +616,12 @@ mod platform {
                         push_unique(&mut list, "h264_qsv");
                     }
                 }
-                push_unique(&mut list, "libx264");
-                push_unique(&mut list, "h264");
-                if allow_fallback {
-                    push_unique(&mut list, "mpeg4");
+                if !gpu_surface_only {
+                    push_unique(&mut list, "libx264");
+                    push_unique(&mut list, "h264");
+                    if allow_fallback {
+                        push_unique(&mut list, "mpeg4");
+                    }
                 }
                 list
             }
@@ -488,12 +650,24 @@ mod platform {
                         push_unique(&mut list, "hevc_qsv");
                     }
                 }
-                push_unique(&mut list, "libx265");
-                push_unique(&mut list, "hevc");
+                if !gpu_surface_only {
+                    push_unique(&mut list, "libx265");
+                    push_unique(&mut list, "hevc");
+                }
                 list
             }
             VideoCodec::Vp9 => vec!["libvpx-vp9", "vp9"],
         }
+    }
+
+    unsafe extern "C" fn release_d3d11_texture_buffer(opaque: *mut c_void, _data: *mut u8) {
+        use windows::{core::Interface, Win32::Graphics::Direct3D11::ID3D11Texture2D};
+
+        if opaque.is_null() {
+            return;
+        }
+
+        let _ = ID3D11Texture2D::from_raw(opaque as *mut _);
     }
 
     fn selected_backend_label(encoder_name: &str) -> &'static str {
@@ -507,12 +681,61 @@ mod platform {
             "CPU"
         }
     }
+
+    fn selected_codec_label(codec: &VideoCodec) -> &'static str {
+        match codec {
+            VideoCodec::H264 => "H.264",
+            VideoCodec::H265 => "H.265",
+            VideoCodec::Vp9 => "VP9",
+        }
+    }
+
+    fn can_open_encoder(encoder_name: &str) -> bool {
+        let Some(codec) = encoder::find_by_name(encoder_name) else {
+            return false;
+        };
+
+        let mut enc = match codec::context::Context::new_with_codec(codec)
+            .encoder()
+            .video()
+        {
+            Ok(enc) => enc,
+            Err(_) => return false,
+        };
+
+        enc.set_width(1280);
+        enc.set_height(720);
+        enc.set_format(Pixel::YUV420P);
+        enc.set_time_base(Rational::new(1, 1_000));
+        enc.set_frame_rate(Some(Rational::new(30, 1)));
+
+        enc.open_with(Dictionary::new()).is_ok()
+    }
+
+    pub fn detect_video_encoder_capabilities() -> VideoEncoderCapabilities {
+        let _ = ffmpeg_the_third::init();
+
+        VideoEncoderCapabilities {
+            nvenc: can_open_encoder("h264_nvenc"),
+            amf: can_open_encoder("h264_amf"),
+            qsv: can_open_encoder("h264_qsv"),
+            software: can_open_encoder("libx264") || can_open_encoder("h264"),
+        }
+    }
 }
 
 #[cfg(not(target_os = "windows"))]
 mod platform {
     use crate::capture::models::RawFrame;
     use crate::encoder::config::EncoderConfig;
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct VideoEncoderCapabilities {
+        pub nvenc: bool,
+        pub amf: bool,
+        pub qsv: bool,
+        pub software: bool,
+    }
 
     pub struct FfmpegEncoderConsumer;
 
@@ -529,6 +752,15 @@ mod platform {
             Ok(())
         }
     }
+
+    pub fn detect_video_encoder_capabilities() -> VideoEncoderCapabilities {
+        VideoEncoderCapabilities {
+            nvenc: false,
+            amf: false,
+            qsv: false,
+            software: false,
+        }
+    }
 }
 
-pub use platform::FfmpegEncoderConsumer;
+pub use platform::{detect_video_encoder_capabilities, FfmpegEncoderConsumer};

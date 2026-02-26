@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { EncoderPreset, OutputFormat, RecordingQualityMode } from "../../recorder/types";
+import type {
+  EncoderPreset,
+  OutputFormat,
+  RecordingQualityMode,
+  VideoEncoderCapabilities,
+} from "../../recorder/types";
 import type { CodecChoice } from "../../hooks/useRecorderController";
 import {
   SHORTCUT_LABELS,
@@ -80,6 +85,7 @@ interface AdvancedSettingsModalProps {
   fps: number;
   format: OutputFormat;
   codec: CodecChoice;
+  videoEncoderCapabilities: VideoEncoderCapabilities;
   preset: EncoderPreset;
   qualityMode: RecordingQualityMode;
   resolutionChoice: "fullHd" | "hd" | "sd" | "p1440" | "p2160" | "custom";
@@ -215,6 +221,7 @@ export function AdvancedSettingsModal({
   fps,
   format,
   codec,
+  videoEncoderCapabilities,
   preset,
   qualityMode,
   resolutionChoice,
@@ -329,9 +336,9 @@ export function AdvancedSettingsModal({
                 disabled={format === "webM" || isRecording}
               >
                 <option value="auto">Auto (recomendado)</option>
-                <option value="nvenc">NVENC (NVIDIA)</option>
-                <option value="amf">AMF (AMD)</option>
-                <option value="qsv">QSV (Intel)</option>
+                {videoEncoderCapabilities.nvenc && <option value="nvenc">NVENC (NVIDIA)</option>}
+                {videoEncoderCapabilities.amf && <option value="amf">AMF (AMD)</option>}
+                {videoEncoderCapabilities.qsv && <option value="qsv">QSV (Intel)</option>}
                 <option value="h264">H.264</option>
                 <option value="h265">H.265</option>
                 <option value="vp9">VP9</option>

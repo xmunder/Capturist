@@ -10,6 +10,7 @@ pub struct RuntimeStartConfig {
     pub target_id: u32,
     pub fps: u32,
     pub crop_region: Option<Region>,
+    pub prefer_gpu_frames: bool,
     pub on_frame_arrived: FrameArrivedCallback,
     pub on_session_finished: SessionFinishedCallback,
 }
@@ -36,6 +37,7 @@ mod platform {
         time::Duration,
     };
 
+    use windows::core::Interface;
     use windows_capture::{
         capture::{CaptureControl, Context, GraphicsCaptureApiHandler},
         frame::Frame,
@@ -68,6 +70,7 @@ mod platform {
             paused: paused.clone(),
             frame_counter: frame_counter.clone(),
             crop_region: config.crop_region,
+            prefer_gpu_frames: config.prefer_gpu_frames,
             on_frame_arrived: config.on_frame_arrived,
         };
 
@@ -171,6 +174,7 @@ mod platform {
         paused: Arc<AtomicBool>,
         frame_counter: Arc<AtomicU64>,
         crop_region: Option<Region>,
+        prefer_gpu_frames: bool,
         on_frame_arrived: FrameArrivedCallback,
     }
 
@@ -199,6 +203,23 @@ mod platform {
             let frame_height = frame.height();
             let timestamp_ms = frame_timestamp_ms(frame);
 
+            let should_use_gpu_surface =
+                self.flags.prefer_gpu_frames && self.flags.crop_region.is_none();
+            if should_use_gpu_surface {
+                let texture_ptr = clone_frame_texture_ptr(frame)?;
+                let raw_frame = RawFrame::from_gpu_texture(
+                    frame_width,
+                    frame_height,
+                    texture_ptr,
+                    timestamp_ms,
+                );
+                (self.flags.on_frame_arrived)(raw_frame)
+                    .map_err(|err| format!("Error procesando frame en encoder: {err}"))?;
+
+                self.flags.frame_counter.fetch_add(1, Ordering::Relaxed);
+                return Ok(());
+            }
+
             let mut frame_buffer = if let Some(region) = &self.flags.crop_region {
                 let (start_x, start_y, end_x, end_y) =
                     clamp_crop_region(region, frame_width, frame_height)?;
@@ -213,16 +234,21 @@ mod platform {
 
             let width = frame_buffer.width();
             let height = frame_buffer.height();
+            let row_stride_bytes = frame_buffer.row_pitch();
 
-            let bytes = frame_buffer
-                .as_nopadding_buffer()
-                .map_err(|err| format!("Error normalizando buffer del frame: {err}"))?;
+            let bytes = frame_buffer.as_raw_buffer();
 
             if bytes.is_empty() {
                 return Err("Se recibió un frame vacío desde windows-capture".to_string());
             }
 
-            let raw_frame = RawFrame::new(bytes.to_vec(), width, height, timestamp_ms);
+            let raw_frame = RawFrame::new(
+                bytes.to_vec(),
+                width,
+                height,
+                row_stride_bytes,
+                timestamp_ms,
+            );
             (self.flags.on_frame_arrived)(raw_frame)
                 .map_err(|err| format!("Error procesando frame en encoder: {err}"))?;
 
@@ -242,6 +268,18 @@ mod platform {
         }
 
         (raw_duration_100ns as u64) / 10_000
+    }
+
+    fn clone_frame_texture_ptr(frame: &Frame) -> Result<usize, String> {
+        let texture = unsafe { frame.as_raw_texture().clone() };
+        let texture_ptr = texture.as_raw() as usize;
+        std::mem::forget(texture);
+
+        if texture_ptr == 0 {
+            return Err("No se pudo clonar la textura D3D11 del frame".to_string());
+        }
+
+        Ok(texture_ptr)
     }
 
     fn clamp_crop_region(
@@ -315,9 +353,9 @@ mod platform {
                 (Ok(()), Ok(())) => Ok(self.frame_counter.load(Ordering::Relaxed)),
                 (Err(stop_err), Ok(())) => Err(stop_err),
                 (Ok(()), Err(finalize_err)) => Err(finalize_err),
-                (Err(stop_err), Err(finalize_err)) => Err(format!(
-                    "{stop_err}. Además falló la finalización del encoder: {finalize_err}"
-                )),
+                (Err(stop_err), Err(finalize_err)) => {
+                    Err(merge_runtime_and_finalize_error(stop_err, finalize_err))
+                }
             }
         }
 
@@ -335,11 +373,23 @@ mod platform {
                 (Ok(()), Ok(())) => Ok(self.frame_counter.load(Ordering::Relaxed)),
                 (Err(wait_err), Ok(())) => Err(wait_err),
                 (Ok(()), Err(finalize_err)) => Err(finalize_err),
-                (Err(wait_err), Err(finalize_err)) => Err(format!(
-                    "{wait_err}. Además falló la finalización del encoder: {finalize_err}"
-                )),
+                (Err(wait_err), Err(finalize_err)) => {
+                    Err(merge_runtime_and_finalize_error(wait_err, finalize_err))
+                }
             }
         }
+    }
+
+    fn merge_runtime_and_finalize_error(runtime_err: String, finalize_err: String) -> String {
+        if runtime_err.contains(&finalize_err) {
+            return runtime_err;
+        }
+
+        if finalize_err.contains(&runtime_err) {
+            return finalize_err;
+        }
+
+        format!("{runtime_err}. Además falló la finalización del encoder: {finalize_err}")
     }
 }
 

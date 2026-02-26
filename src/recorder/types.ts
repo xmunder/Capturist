@@ -30,6 +30,13 @@ export interface RecordingAudioStatus {
   microphoneAudioDeviceName?: string | null;
 }
 
+export interface VideoEncoderCapabilities {
+  nvenc: boolean;
+  amf: boolean;
+  qsv: boolean;
+  software: boolean;
+}
+
 export type OutputFormat = "mp4" | "mkv" | "webM";
 
 export type VideoCodec = "h264" | "h265" | "vp9";

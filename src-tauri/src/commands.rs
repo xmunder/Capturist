@@ -16,6 +16,7 @@ use crate::{
             AudioCaptureConfig, EncoderConfig, EncoderPreset, OutputFormat, OutputResolution,
             QualityMode, VideoCodec, VideoEncoderPreference,
         },
+        consumer::detect_video_encoder_capabilities,
         processing_status::{is_processing, set_processing},
         video_encoder_status::{get_live_video_encoder_label, set_live_video_encoder_label},
     },
@@ -78,6 +79,15 @@ pub struct RecordingSessionConfig {
 pub struct RecordingAudioCaptureUpdate {
     pub capture_system_audio: bool,
     pub capture_microphone_audio: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VideoEncoderCapabilitiesSnapshot {
+    pub nvenc: bool,
+    pub amf: bool,
+    pub qsv: bool,
+    pub software: bool,
 }
 
 fn default_crf() -> u32 {
@@ -151,6 +161,17 @@ pub fn get_targets(state: State<AppState>) -> Result<Vec<CaptureTarget>, String>
 #[tauri::command]
 pub fn get_audio_input_devices() -> Result<Vec<String>, String> {
     list_microphone_input_devices()
+}
+
+#[tauri::command]
+pub fn get_video_encoder_capabilities() -> VideoEncoderCapabilitiesSnapshot {
+    let capabilities = detect_video_encoder_capabilities();
+    VideoEncoderCapabilitiesSnapshot {
+        nvenc: capabilities.nvenc,
+        amf: capabilities.amf,
+        qsv: capabilities.qsv,
+        software: capabilities.software,
+    }
 }
 
 #[tauri::command]

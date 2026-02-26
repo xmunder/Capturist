@@ -61,6 +61,7 @@ pub fn run() {
             commands::is_capture_supported,
             commands::get_targets,
             commands::get_audio_input_devices,
+            commands::get_video_encoder_capabilities,
             commands::get_recording_audio_status,
             commands::set_global_shortcuts,
             commands::start_recording,

@@ -14,16 +14,18 @@ mod win {
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
         GetMessageW, GetSystemMetrics, LoadCursorW, RegisterClassW, SetCursor, SetForegroundWindow,
         SetLayeredWindowAttributes, ShowWindow, TranslateMessage, CS_HREDRAW, CS_VREDRAW, HMENU,
-        IDC_CROSS, LWA_ALPHA, MSG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-        SM_YVIRTUALSCREEN, SW_SHOW, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
-        WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-        WS_EX_TOPMOST, WS_POPUP,
+        IDC_CROSS, LWA_ALPHA, LWA_COLORKEY, MSG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_SHOW, WM_ERASEBKGND, WM_KEYDOWN, WM_LBUTTONDOWN,
+        WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN, WNDCLASSW, WS_EX_LAYERED,
+        WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
     };
 
     use crate::capture::models::Region;
 
     const MIN_SELECTION_EDGE_PX: i32 = 5;
-    const OVERLAY_ALPHA: u8 = 120;
+    const OVERLAY_DIM_ALPHA: u8 = 120;
+    const OVERLAY_COLOR: COLORREF = COLORREF(0x00000000);
+    const SELECTION_HOLE_COLOR: COLORREF = COLORREF(0x00030201);
 
     #[derive(Default, Copy, Clone)]
     struct State {
@@ -77,7 +79,7 @@ mod win {
         let mut client = RECT::default();
         let _ = GetClientRect(hwnd, &mut client);
 
-        let base_brush = CreateSolidBrush(COLORREF(0x000000));
+        let base_brush = CreateSolidBrush(OVERLAY_COLOR);
         if !base_brush.0.is_null() {
             let _ = FillRect(hdc, &client, base_brush);
             let _ = DeleteObject(base_brush.into());
@@ -89,10 +91,12 @@ mod win {
         };
 
         if has_area(&selection) {
-            let highlight_brush = CreateSolidBrush(COLORREF(0x00343434));
-            if !highlight_brush.0.is_null() {
-                let _ = FillRect(hdc, &selection, highlight_brush);
-                let _ = DeleteObject(highlight_brush.into());
+            // La región seleccionada usa un color-key transparente para imitar Snipping Tool:
+            // fuera de la selección queda oscurecido y dentro se ve el contenido real.
+            let hole_brush = CreateSolidBrush(SELECTION_HOLE_COLOR);
+            if !hole_brush.0.is_null() {
+                let _ = FillRect(hdc, &selection, hole_brush);
+                let _ = DeleteObject(hole_brush.into());
             }
 
             let border_brush = CreateSolidBrush(COLORREF(0x00FFFFFF));
@@ -222,7 +226,12 @@ mod win {
             }
 
             SetCursor(Some(LoadCursorW(None, IDC_CROSS).unwrap_or_default()));
-            let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), OVERLAY_ALPHA, LWA_ALPHA);
+            let _ = SetLayeredWindowAttributes(
+                hwnd,
+                SELECTION_HOLE_COLOR,
+                OVERLAY_DIM_ALPHA,
+                LWA_ALPHA | LWA_COLORKEY,
+            );
             let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
             request_repaint(hwnd);

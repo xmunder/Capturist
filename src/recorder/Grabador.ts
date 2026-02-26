@@ -6,6 +6,7 @@ import type {
   OutputFormat,
   RecordingAudioStatus,
   RecordingSessionConfig,
+  VideoEncoderCapabilities,
 } from "./types";
 
 export class Grabador {
@@ -19,6 +20,10 @@ export class Grabador {
 
   static async getAudioInputDevices(): Promise<string[]> {
     return invoke("get_audio_input_devices");
+  }
+
+  static async getVideoEncoderCapabilities(): Promise<VideoEncoderCapabilities> {
+    return invoke("get_video_encoder_capabilities");
   }
 
   static async start(config: RecordingSessionConfig): Promise<void> {

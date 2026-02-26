@@ -55,32 +55,129 @@ impl Region {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub struct RawFrame {
     pub data: Vec<u8>,
     pub width: u32,
     pub height: u32,
+    pub row_stride_bytes: u32,
+    pub gpu_texture_ptr: Option<usize>,
     pub timestamp_ms: u64,
 }
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 impl RawFrame {
-    pub fn new(data: Vec<u8>, width: u32, height: u32, timestamp_ms: u64) -> Self {
+    pub fn new(
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+        row_stride_bytes: u32,
+        timestamp_ms: u64,
+    ) -> Self {
+        let min_row_stride = Self::min_row_stride_bytes(width);
         Self {
             data,
             width,
             height,
+            row_stride_bytes: row_stride_bytes.max(min_row_stride),
+            gpu_texture_ptr: None,
             timestamp_ms,
         }
     }
 
-    pub fn expected_size(width: u32, height: u32) -> usize {
-        (width * height * 4) as usize
+    #[cfg(target_os = "windows")]
+    pub fn from_gpu_texture(
+        width: u32,
+        height: u32,
+        texture_ptr: usize,
+        timestamp_ms: u64,
+    ) -> Self {
+        Self {
+            data: Vec::new(),
+            width,
+            height,
+            row_stride_bytes: 0,
+            gpu_texture_ptr: (texture_ptr != 0).then_some(texture_ptr),
+            timestamp_ms,
+        }
+    }
+
+    pub fn min_row_stride_bytes(width: u32) -> u32 {
+        width.saturating_mul(4)
+    }
+
+    pub fn expected_size(height: u32, row_stride_bytes: u32) -> usize {
+        height.saturating_mul(row_stride_bytes) as usize
+    }
+
+    pub fn has_cpu_data(&self) -> bool {
+        !self.data.is_empty()
+    }
+
+    pub fn has_gpu_texture(&self) -> bool {
+        self.gpu_texture_ptr.is_some()
+    }
+
+    pub fn take_gpu_texture_ptr(&mut self) -> Option<usize> {
+        self.gpu_texture_ptr.take()
     }
 
     pub fn is_valid(&self) -> bool {
-        self.data.len() == Self::expected_size(self.width, self.height)
+        if self.has_cpu_data() {
+            if self.width == 0 || self.height == 0 {
+                return false;
+            }
+
+            if self.row_stride_bytes < Self::min_row_stride_bytes(self.width) {
+                return false;
+            }
+
+            return self.data.len() >= Self::expected_size(self.height, self.row_stride_bytes);
+        }
+
+        if self.has_gpu_texture() {
+            return self.width > 0 && self.height > 0;
+        }
+
+        false
+    }
+}
+
+impl Drop for RawFrame {
+    fn drop(&mut self) {
+        #[cfg(target_os = "windows")]
+        if let Some(ptr) = self.gpu_texture_ptr.take() {
+            // El ownership del puntero COM se transfiere en `from_gpu_texture`
+            // y se libera de forma segura al descartar el frame.
+            unsafe { release_d3d11_texture_ptr(ptr) };
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn release_d3d11_texture_ptr(texture_ptr: usize) {
+    use windows::{core::Interface, Win32::Graphics::Direct3D11::ID3D11Texture2D};
+
+    if texture_ptr == 0 {
+        return;
+    }
+
+    let _ = ID3D11Texture2D::from_raw(texture_ptr as *mut _);
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+impl RawFrame {
+    pub fn is_cpu_layout_valid(&self) -> bool {
+        if self.width == 0 || self.height == 0 {
+            return false;
+        }
+
+        if self.row_stride_bytes < Self::min_row_stride_bytes(self.width) {
+            return false;
+        }
+
+        self.data.len() >= Self::expected_size(self.height, self.row_stride_bytes)
     }
 }
 

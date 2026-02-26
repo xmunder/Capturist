@@ -1,17 +1,25 @@
 use std::{
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::{self, SyncSender, TrySendError},
+        Arc, Mutex,
+    },
+    thread::{self, JoinHandle},
     time::Instant,
 };
 
 use crate::capture::{
-    models::{CaptureResolutionPreset, CaptureState, CaptureTarget, Region},
+    models::{CaptureResolutionPreset, CaptureState, CaptureTarget, RawFrame, Region},
     provider::{ScreenProvider, WindowsCaptureScreenProvider},
     runtime::{
         self, CaptureRuntimeHandle, FrameArrivedCallback, RuntimeStartConfig,
         SessionFinishedCallback,
     },
 };
-use crate::encoder::{config::EncoderConfig, consumer::FfmpegEncoderConsumer};
+use crate::encoder::{
+    config::{EncoderConfig, VideoCodec, VideoEncoderPreference},
+    consumer::FfmpegEncoderConsumer,
+};
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -122,11 +130,22 @@ impl CaptureManager {
         Self::with_dependencies(
             Box::new(WindowsCaptureScreenProvider::new()),
             RuntimeFactory::new(|config: SessionConfig| {
-                let frame_callbacks = build_runtime_callbacks(config.encoder_config)?;
+                let prefer_gpu_frames =
+                    should_prefer_gpu_frames(&config.encoder_config, &config.crop_region);
+                let SessionConfig {
+                    target_id,
+                    fps,
+                    crop_region,
+                    capture_resolution_preset: _,
+                    encoder_config,
+                } = config;
+
+                let frame_callbacks = build_runtime_callbacks(encoder_config)?;
                 runtime::start_runtime(RuntimeStartConfig {
-                    target_id: config.target_id,
-                    fps: config.fps,
-                    crop_region: config.crop_region,
+                    target_id,
+                    fps,
+                    crop_region,
+                    prefer_gpu_frames,
                     on_frame_arrived: frame_callbacks.0,
                     on_session_finished: frame_callbacks.1,
                 })
@@ -341,32 +360,207 @@ impl Default for CaptureManager {
     }
 }
 
+fn should_prefer_gpu_frames(encoder_config: &EncoderConfig, crop_region: &Option<Region>) -> bool {
+    should_prefer_gpu_frames_with_flag(
+        encoder_config,
+        crop_region,
+        is_experimental_d3d11_input_enabled(),
+    )
+}
+
+fn should_prefer_gpu_frames_with_flag(
+    encoder_config: &EncoderConfig,
+    crop_region: &Option<Region>,
+    d3d11_input_enabled: bool,
+) -> bool {
+    // Ruta experimental: sin AVHWFramesContext completo algunos drivers/encoders
+    // rechazan AV_PIX_FMT_D3D11 con "Invalid argument".
+    if !d3d11_input_enabled {
+        return false;
+    }
+
+    if crop_region.is_some() {
+        return false;
+    }
+
+    let codec = encoder_config.effective_codec();
+    if matches!(codec, VideoCodec::Vp9) {
+        return false;
+    }
+
+    matches!(
+        encoder_config.video_encoder_preference,
+        VideoEncoderPreference::Nvenc | VideoEncoderPreference::Amf | VideoEncoderPreference::Qsv
+    )
+}
+
+fn is_experimental_d3d11_input_enabled() -> bool {
+    match std::env::var("CAPTURIST_EXPERIMENTAL_D3D11_INPUT") {
+        Ok(value) => {
+            let normalized = value.trim().to_ascii_lowercase();
+            normalized == "1" || normalized == "true" || normalized == "yes"
+        }
+        Err(_) => false,
+    }
+}
+
+const VIDEO_PIPELINE_QUEUE_CAPACITY: usize = 6;
+
+enum VideoWorkerMessage {
+    Frame(RawFrame),
+    Stop,
+}
+
+struct AsyncVideoPipeline {
+    sender: SyncSender<VideoWorkerMessage>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    worker_error: Arc<Mutex<Option<String>>>,
+    dropped_frames: AtomicU64,
+}
+
 fn build_runtime_callbacks(
     encoder_config: EncoderConfig,
 ) -> Result<(FrameArrivedCallback, SessionFinishedCallback), String> {
-    let consumer = Arc::new(Mutex::new(FfmpegEncoderConsumer::new(encoder_config)?));
+    let (sender, receiver) =
+        mpsc::sync_channel::<VideoWorkerMessage>(VIDEO_PIPELINE_QUEUE_CAPACITY);
+    let worker_error = Arc::new(Mutex::new(None::<String>));
+    let worker_error_for_thread = Arc::clone(&worker_error);
+
+    let worker = thread::Builder::new()
+        .name("video-encoder-worker".to_string())
+        .spawn(move || {
+            let mut consumer = match FfmpegEncoderConsumer::new(encoder_config) {
+                Ok(consumer) => consumer,
+                Err(err) => {
+                    set_worker_error(&worker_error_for_thread, err);
+                    return;
+                }
+            };
+
+            while let Ok(message) = receiver.recv() {
+                match message {
+                    VideoWorkerMessage::Frame(raw_frame) => {
+                        if let Err(err) = consumer.on_frame(raw_frame) {
+                            set_worker_error(
+                                &worker_error_for_thread,
+                                format!("Error codificando frame de video: {err}"),
+                            );
+                            break;
+                        }
+                    }
+                    VideoWorkerMessage::Stop => break,
+                }
+            }
+
+            if let Err(err) = consumer.on_stop() {
+                set_worker_error(
+                    &worker_error_for_thread,
+                    format!("Error cerrando encoder de video: {err}"),
+                );
+            }
+        })
+        .map_err(|err| format!("No se pudo crear worker de codificación de video: {err}"))?;
+
+    let pipeline = Arc::new(AsyncVideoPipeline {
+        sender,
+        worker: Mutex::new(Some(worker)),
+        worker_error,
+        dropped_frames: AtomicU64::new(0),
+    });
 
     let frame_callback: FrameArrivedCallback = {
-        let consumer = Arc::clone(&consumer);
+        let pipeline = Arc::clone(&pipeline);
         Arc::new(move |raw_frame| {
-            let mut guard = consumer
-                .lock()
-                .map_err(|_| "No se pudo adquirir lock del encoder de video".to_string())?;
-            guard.on_frame(raw_frame)
+            if let Some(err) = read_worker_error(&pipeline.worker_error)? {
+                return Err(err);
+            }
+
+            match pipeline
+                .sender
+                .try_send(VideoWorkerMessage::Frame(raw_frame))
+            {
+                Ok(()) => Ok(()),
+                Err(TrySendError::Full(_)) => {
+                    // Mantiene la captura fluida cuando el encoder va atrasado.
+                    pipeline.dropped_frames.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                }
+                Err(TrySendError::Disconnected(_)) => {
+                    if let Some(err) = read_worker_error(&pipeline.worker_error)? {
+                        return Err(err);
+                    }
+                    Err("El worker de codificación de video se desconectó".to_string())
+                }
+            }
         })
     };
 
     let session_finished_callback: SessionFinishedCallback = {
-        let consumer = Arc::clone(&consumer);
+        let pipeline = Arc::clone(&pipeline);
         Arc::new(move || {
-            let mut guard = consumer
+            let _ = pipeline.sender.send(VideoWorkerMessage::Stop);
+
+            let worker = pipeline
+                .worker
                 .lock()
-                .map_err(|_| "No se pudo adquirir lock para cerrar encoder de video".to_string())?;
-            guard.on_stop()
+                .map_err(|_| {
+                    "No se pudo adquirir lock para esperar worker de codificación".to_string()
+                })?
+                .take();
+
+            if let Some(worker) = worker {
+                if worker.join().is_err() {
+                    set_worker_error(
+                        &pipeline.worker_error,
+                        "El worker de codificación de video finalizó con panic".to_string(),
+                    );
+                }
+            }
+
+            let dropped = pipeline.dropped_frames.load(Ordering::Relaxed);
+            if dropped > 0 {
+                eprintln!(
+                    "[capture] Se descartaron {dropped} frames por backpressure del encoder."
+                );
+            }
+
+            if let Some(err) = take_worker_error(&pipeline.worker_error)? {
+                return Err(err);
+            }
+
+            Ok(())
         })
     };
 
     Ok((frame_callback, session_finished_callback))
+}
+
+fn read_worker_error(error_slot: &Arc<Mutex<Option<String>>>) -> Result<Option<String>, String> {
+    error_slot
+        .lock()
+        .map_err(|_| "No se pudo adquirir lock del estado de error del encoder".to_string())
+        .map(|guard| guard.clone())
+}
+
+fn take_worker_error(error_slot: &Arc<Mutex<Option<String>>>) -> Result<Option<String>, String> {
+    error_slot
+        .lock()
+        .map_err(|_| "No se pudo adquirir lock del estado de error del encoder".to_string())
+        .map(|mut guard| guard.take())
+}
+
+fn set_worker_error(error_slot: &Arc<Mutex<Option<String>>>, message: String) {
+    if let Ok(mut guard) = error_slot.lock() {
+        match guard.as_mut() {
+            Some(existing) => {
+                existing.push_str(" | ");
+                existing.push_str(&message);
+            }
+            None => {
+                *guard = Some(message);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -378,6 +572,7 @@ mod tests {
 
     use super::*;
     use crate::capture::models::TargetKind;
+    use crate::encoder::config::{VideoCodec, VideoEncoderPreference};
 
     struct MockScreenProvider {
         supported: bool,
@@ -519,5 +714,55 @@ mod tests {
         let err = manager.start(make_session_config(999)).unwrap_err();
 
         assert!(err.contains("No se encontró un target"));
+    }
+
+    #[test]
+    fn prefiere_frames_gpu_solo_en_hw_explicito_y_sin_crop() {
+        let config = EncoderConfig {
+            video_encoder_preference: VideoEncoderPreference::Nvenc,
+            ..EncoderConfig::default()
+        };
+        assert!(should_prefer_gpu_frames_with_flag(&config, &None, true));
+    }
+
+    #[test]
+    fn no_prefiere_frames_gpu_en_auto_para_preservar_fallback_cpu() {
+        let config = EncoderConfig {
+            video_encoder_preference: VideoEncoderPreference::Auto,
+            ..EncoderConfig::default()
+        };
+        assert!(!should_prefer_gpu_frames_with_flag(&config, &None, true));
+    }
+
+    #[test]
+    fn no_prefiere_frames_gpu_con_crop_ni_vp9() {
+        let config = EncoderConfig {
+            video_encoder_preference: VideoEncoderPreference::Nvenc,
+            codec: Some(VideoCodec::Vp9),
+            ..EncoderConfig::default()
+        };
+        assert!(!should_prefer_gpu_frames_with_flag(&config, &None, true));
+        assert!(!should_prefer_gpu_frames_with_flag(
+            &EncoderConfig {
+                video_encoder_preference: VideoEncoderPreference::Nvenc,
+                ..EncoderConfig::default()
+            },
+            &Some(Region {
+                x: 0,
+                y: 0,
+                width: 100,
+                height: 100,
+            }),
+            true,
+        ));
+    }
+
+    #[test]
+    fn no_prefiere_frames_gpu_si_feature_experimental_esta_deshabilitada() {
+        let config = EncoderConfig {
+            video_encoder_preference: VideoEncoderPreference::Nvenc,
+            ..EncoderConfig::default()
+        };
+        assert!(!should_prefer_gpu_frames_with_flag(&config, &None, false));
     }
 }

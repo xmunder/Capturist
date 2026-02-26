@@ -244,6 +244,7 @@ function App() {
         fps={state.fps}
         format={state.format}
         codec={state.codec}
+        videoEncoderCapabilities={derived.videoEncoderCapabilities}
         preset={state.preset}
         qualityMode={state.qualityMode}
         resolutionChoice={state.resolutionChoice}

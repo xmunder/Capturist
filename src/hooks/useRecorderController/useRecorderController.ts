@@ -18,6 +18,7 @@ import type {
   RecordingAudioStatus,
   RecordingSessionConfig,
   VideoCodec,
+  VideoEncoderCapabilities,
   VideoEncoderPreference,
 } from "../../recorder/types";
 import { normalizeRegionFromNativeSelection } from "../../region/normalize";
@@ -62,6 +63,13 @@ const RESOLUTION_DIMENSIONS: Record<Exclude<ResolutionChoice, "custom">, { width
   sd: { width: 854, height: 480 },
   p1440: { width: 2560, height: 1440 },
   p2160: { width: 3840, height: 2160 },
+};
+
+const DEFAULT_VIDEO_ENCODER_CAPABILITIES: VideoEncoderCapabilities = {
+  nvenc: false,
+  amf: false,
+  qsv: false,
+  software: true,
 };
 
 const DEBUG_REGION = true;
@@ -125,6 +133,19 @@ function resolveCodecSelection(choice: CodecChoice): {
   }
 }
 
+function isCodecChoiceAvailable(choice: CodecChoice, capabilities: VideoEncoderCapabilities): boolean {
+  switch (choice) {
+    case "nvenc":
+      return capabilities.nvenc;
+    case "amf":
+      return capabilities.amf;
+    case "qsv":
+      return capabilities.qsv;
+    default:
+      return true;
+  }
+}
+
 function loadStoredShortcuts(): RecorderShortcuts {
   if (typeof window === "undefined") {
     return { ...DEFAULT_SHORTCUTS };
@@ -163,6 +184,9 @@ export function useRecorderController() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [lastError, setLastError] = useState<string | null>(null);
   const [activeVideoEncoderLabel, setActiveVideoEncoderLabel] = useState<string | null>(null);
+  const [videoEncoderCapabilities, setVideoEncoderCapabilities] = useState<VideoEncoderCapabilities>(
+    DEFAULT_VIDEO_ENCODER_CAPABILITIES,
+  );
 
   const [outputDir, setOutputDir] = useState("");
   const [homePath, setHomePath] = useState("");
@@ -326,8 +350,16 @@ export function useRecorderController() {
           microphones = [];
         }
 
+        let encoderCapabilities = DEFAULT_VIDEO_ENCODER_CAPABILITIES;
+        try {
+          encoderCapabilities = await Grabador.getVideoEncoderCapabilities();
+        } catch {
+          encoderCapabilities = DEFAULT_VIDEO_ENCODER_CAPABILITIES;
+        }
+
         if (!mounted) return;
         applyMicrophoneDeviceList(microphones);
+        setVideoEncoderCapabilities(encoderCapabilities);
 
         const preferredDir = await defaultVideosDir(userHome);
         const fallbackDir = await join(userHome, "Videos");
@@ -383,6 +415,12 @@ export function useRecorderController() {
       setCodec("vp9");
     }
   }, [codec, format]);
+
+  useEffect(() => {
+    if (!isCodecChoiceAvailable(codec, videoEncoderCapabilities)) {
+      setCodec("auto");
+    }
+  }, [codec, videoEncoderCapabilities]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -842,11 +880,16 @@ export function useRecorderController() {
     let shouldRestoreWindow = false;
 
     try {
-      const wasMinimized = await currentWindow.isMinimized();
-      if (!wasMinimized) {
-        shouldRestoreWindow = true;
-        await currentWindow.minimize();
-        await new Promise((resolve) => setTimeout(resolve, 180));
+      try {
+        const wasMinimized = await currentWindow.isMinimized();
+        if (!wasMinimized) {
+          shouldRestoreWindow = true;
+          await currentWindow.minimize();
+          await new Promise((resolve) => setTimeout(resolve, 180));
+        }
+      } catch (minimizeErr) {
+        shouldRestoreWindow = false;
+        console.warn("[window] no se pudo minimizar antes de seleccionar region", minimizeErr);
       }
 
       const region = await Grabador.selectRegionNative();
@@ -949,6 +992,7 @@ export function useRecorderController() {
       outputResolutionLabel,
       elapsedLabel,
       codecLabel,
+      videoEncoderCapabilities,
       statusLabel,
       showCropControls: activeTarget?.kind !== "window",
       hasAlerts: Boolean(lastError || errorMsg),
