@@ -15,6 +15,7 @@ dist-ssr
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
+.vscode/extensions.json
 .idea
 .DS_Store
 *.suo
@@ -22,3 +23,13 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Workspace local metadata
+AGENTS.md
+
+# Optional FFmpeg artifacts not required for build/runtime
+ffmpeg-windows/bin/ffplay.exe
+ffmpeg-windows/bin/ffprobe.exe
+ffmpeg-windows/bin/capturist-temp/
+ffmpeg-windows/doc/
+ffmpeg-windows/presets/
