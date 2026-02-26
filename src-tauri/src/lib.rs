@@ -3,6 +3,7 @@ use std::sync::Mutex;
 mod capture;
 mod commands;
 mod encoder;
+mod region;
 mod shortcuts;
 
 use capture::manager::CaptureManager;

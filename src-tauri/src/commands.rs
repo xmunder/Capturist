@@ -21,6 +21,7 @@ use crate::{
             get_live_video_encoder_label, infer_label_from_preference, set_live_video_encoder_label,
         },
     },
+    region,
     shortcuts::ShortcutBindings,
     AppState,
 };
@@ -41,8 +42,7 @@ fn lock_capture<'a>(
 
 #[tauri::command]
 pub fn select_region_native() -> Result<Option<Region>, String> {
-    // Placeholder del contrato: implementación nativa pendiente.
-    Ok(None)
+    region::select_region()
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
