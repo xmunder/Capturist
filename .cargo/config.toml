@@ -1,0 +1,2 @@
+[env]
+FFMPEG_DIR = { value = "ffmpeg-windows", relative = true }
