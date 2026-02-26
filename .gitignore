@@ -1,5 +1,5 @@
 # Logs
-logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,17 +7,31 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Node / pnpm
+node_modules/
+.pnpm-store/
+dist/
+dist-ssr/
+
+# Rust / Tauri generated output
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Local artifacts
+artifacts/
+ffmpeg-windows/
+
+# Local environment files
+.env
+.env.*
+!.env.example
 *.local
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.vscode/extensions.json
-.idea
+# Editor / OS files
+.vscode/
+.idea/
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
@@ -26,11 +40,3 @@ dist-ssr
 
 # Workspace local metadata
 AGENTS.md
-artifacts/
-
-# Optional FFmpeg artifacts not required for build/runtime
-ffmpeg-windows/bin/ffplay.exe
-ffmpeg-windows/bin/ffprobe.exe
-ffmpeg-windows/bin/capturist-temp/
-ffmpeg-windows/doc/
-ffmpeg-windows/presets/
