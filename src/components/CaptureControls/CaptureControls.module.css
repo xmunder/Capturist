@@ -1,0 +1,426 @@
+.captureColumn {
+  min-width: 0;
+  padding: 28px 32px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.captureSpacer {
+  display: none;
+}
+
+.captureControls {
+  width: min(760px, 100%);
+  max-width: 760px;
+  display: grid;
+  gap: 14px;
+}
+
+.sectionTitle {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.targetRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.captureSelectWrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+
+.captureSelect {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(90deg, #212327 0%, #26282d 100%);
+  color: var(--text);
+  padding: 10px 42px 10px 14px;
+  font-size: 14px;
+  font-weight: 400;
+  font-family: inherit;
+  min-height: 40px;
+  color-scheme: dark;
+}
+
+.captureSelect option {
+  background: #1b1f25;
+  color: #f4f6f8;
+}
+
+.captureSelect:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.captureSelect:focus-visible,
+.actionButton:focus-visible,
+.iconButton:focus-visible,
+.captureAreaButton:focus-visible,
+.switchToggle:focus-visible,
+.gainSlider:focus-visible,
+.textButton:focus-visible {
+  outline: 2px solid rgba(240, 138, 60, 0.75);
+  outline-offset: 2px;
+}
+
+.selectIcon {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  filter: brightness(0) saturate(100%) invert(82%) sepia(6%) saturate(325%)
+    hue-rotate(176deg) brightness(96%) contrast(91%);
+}
+
+.iconButton {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: linear-gradient(135deg, #202227 0%, #191c20 100%);
+  color: var(--muted-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.iconButton svg {
+  width: 18px;
+  height: 18px;
+}
+
+.iconButton:hover:not(:disabled) {
+  border-color: rgba(240, 138, 60, 0.55);
+  transform: translateY(-1px);
+}
+
+.iconButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.captureAreaRow {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.captureAreaButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: linear-gradient(90deg, #202327 0%, #24262b 100%);
+  color: #aab1bd;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+
+.captureAreaButton img {
+  width: 14px;
+  height: 14px;
+  filter: brightness(0) saturate(100%) invert(66%) sepia(10%) saturate(329%)
+    hue-rotate(179deg) brightness(93%) contrast(86%);
+}
+
+.captureAreaButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(240, 138, 60, 0.35);
+}
+
+.captureAreaButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.captureAreaButtonActive {
+  background: rgba(240, 138, 60, 0.2);
+  color: #ff9f54;
+  border-color: rgba(240, 138, 60, 0.5);
+}
+
+.captureAreaButtonActive img {
+  filter: brightness(0) saturate(100%) invert(62%) sepia(56%) saturate(2179%)
+    hue-rotate(336deg) brightness(100%) contrast(90%);
+}
+
+.audioCard {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(90deg, #23262b 0%, #25272c 100%);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.audioRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.audioLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #f0f3f8;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.audioToggleIcon {
+  width: 14px;
+  height: 14px;
+  color: #f19144;
+}
+
+.switchToggle {
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(240, 138, 60, 0.45);
+  background: rgba(240, 138, 60, 0.22);
+  padding: 1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.switchThumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #0f1115;
+  transition: transform 0.2s ease;
+}
+
+.switchToggleActive {
+  background: rgba(240, 138, 60, 0.95);
+  border-color: rgba(240, 138, 60, 0.95);
+}
+
+.switchToggleActive .switchThumb {
+  transform: translateX(14px);
+}
+
+.switchToggle:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.microphoneSettings {
+  display: grid;
+  gap: 9px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.deviceRow {
+  display: grid;
+  gap: 6px;
+  padding-left: 24px;
+}
+
+.audioDeviceField {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.audioDeviceSelect {
+  width: 100%;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(90deg, #212327 0%, #26282d 100%);
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 400;
+  font-family: inherit;
+  min-height: 38px;
+  color-scheme: dark;
+}
+
+.audioDeviceSelect option {
+  background: #1b1f25;
+  color: #f4f6f8;
+}
+
+.audioDeviceSelect:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gainRow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding-left: 24px;
+}
+
+.gainLabel {
+  color: #9ca5b3;
+  font-size: 12px;
+}
+
+.gainValue {
+  color: #9ca5b3;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.gainSlider {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.warningInline {
+  border-radius: 10px;
+  border: 1px solid rgba(240, 138, 60, 0.45);
+  background: rgba(240, 138, 60, 0.14);
+  color: #f3bb8f;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(130px, 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.actionButton {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: linear-gradient(90deg, #22252a 0%, #1f2227 100%);
+  color: #f3f6fb;
+  min-height: 42px;
+  padding: 0 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: "Inter", system-ui, sans-serif;
+  cursor: pointer;
+  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+
+.actionButton svg {
+  width: 16px;
+  height: 16px;
+}
+
+.actionButton:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.actionButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.actionPrimary {
+  background: var(--accent);
+  border-color: rgba(240, 138, 60, 0.35);
+  color: #fff9f0;
+}
+
+.actionPrimary:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.actionDanger {
+  background: linear-gradient(90deg, #23262b 0%, #1f2227 100%);
+}
+
+.secondaryActions {
+  margin-top: -2px;
+}
+
+.textButton {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.textButton:hover:not(:disabled) {
+  color: #f0f3f7;
+}
+
+.textButton:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 860px) {
+  .captureColumn {
+    padding: 20px 16px 18px;
+  }
+
+  .captureSpacer {
+    min-height: 80px;
+  }
+
+  .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .captureAreaRow {
+    grid-template-columns: 1fr;
+  }
+
+  .gainRow {
+    grid-template-columns: 1fr;
+    padding-left: 0;
+    gap: 6px;
+  }
+
+  .deviceRow {
+    padding-left: 0;
+  }
+
+  .audioDeviceField {
+    grid-template-columns: 1fr;
+  }
+}

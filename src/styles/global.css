@@ -1,0 +1,45 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
+
+:root {
+  --bg-main: #08090b;
+  --bg-shell: #101113;
+  --bg-soft: #16181c;
+  --bg-soft-strong: #1b1e23;
+  --line: rgba(255, 255, 255, 0.1);
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --text: #f4f6f8;
+  --muted: #a6acb6;
+  --muted-strong: #d4d8de;
+  --accent: #f08a3c;
+  --accent-strong: #f5a35e;
+  --danger: #2a2c31;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Inter", system-ui, sans-serif;
+  font-weight: 400;
+  color: var(--text);
+  color-scheme: dark;
+  background:
+    radial-gradient(circle at 15% -15%, #21242b 0%, #0f1116 34%, transparent 60%),
+    radial-gradient(circle at 100% 0%, #181a20 0%, #0e1014 40%, transparent 60%),
+    linear-gradient(140deg, #090b0f 0%, #08090b 54%, #090a0d 100%);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}

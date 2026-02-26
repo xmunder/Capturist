@@ -1,0 +1,26 @@
+.alerts {
+  border-top: 1px solid var(--line-soft);
+  padding: 14px 20px;
+  display: grid;
+  gap: 8px;
+}
+
+.warningInline {
+  border-radius: 10px;
+  border: 1px solid rgba(240, 138, 60, 0.45);
+  background: rgba(240, 138, 60, 0.14);
+  color: #f3bb8f;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.infoInline {
+  border-radius: 10px;
+  border: 1px solid rgba(92, 167, 255, 0.4);
+  background: rgba(92, 167, 255, 0.12);
+  color: #cfe3ff;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 400;
+}

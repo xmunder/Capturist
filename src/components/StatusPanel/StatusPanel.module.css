@@ -1,0 +1,82 @@
+.statusColumn {
+  border-left: 1px solid var(--line-soft);
+  padding: 36px 30px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: #f4f6f9;
+}
+
+.statusDot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+}
+
+.statusList {
+  display: grid;
+  gap: 16px;
+  width: min(100%, 280px);
+}
+
+.statusRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.statusLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.statusLabel svg {
+  width: 15px;
+  height: 15px;
+  color: #9ea6b3;
+}
+
+.statusValue {
+  color: #f5f7fa;
+  font-family: "Inter", system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.longValue {
+  max-width: 160px;
+  white-space: normal;
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.elapsedValue {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+@media (max-width: 1024px) {
+  .statusColumn {
+    border-left: none;
+    border-top: 1px solid var(--line-soft);
+    padding: 22px 22px 26px;
+  }
+}
