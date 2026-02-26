@@ -144,6 +144,12 @@ impl Default for AudioCaptureConfig {
     }
 }
 
+impl AudioCaptureConfig {
+    pub fn is_enabled(&self) -> bool {
+        self.capture_system_audio || self.capture_microphone_audio
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EncoderConfig {

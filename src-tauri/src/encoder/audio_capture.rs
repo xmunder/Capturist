@@ -1,6 +1,10 @@
-use std::sync::{Mutex, OnceLock};
+#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
 
-use crate::encoder::config::AudioCaptureConfig;
+use std::path::PathBuf;
+
+use tempfile::TempDir;
+
+use crate::encoder::config::{AudioCaptureConfig, OutputFormat};
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -11,40 +15,65 @@ pub struct LiveAudioStatusSnapshot {
     pub microphone_audio_device_name: Option<String>,
 }
 
-fn live_audio_status() -> &'static Mutex<LiveAudioStatusSnapshot> {
-    static LIVE_AUDIO_STATUS: OnceLock<Mutex<LiveAudioStatusSnapshot>> = OnceLock::new();
-    LIVE_AUDIO_STATUS.get_or_init(|| Mutex::new(LiveAudioStatusSnapshot::default()))
+pub struct AudioCaptureService {
+    inner: platform::AudioCaptureServiceImpl,
+}
+
+impl AudioCaptureService {
+    pub fn new(
+        config: AudioCaptureConfig,
+        format: OutputFormat,
+        output_path: PathBuf,
+        final_output_path: PathBuf,
+        temp_dir: TempDir,
+    ) -> Self {
+        Self {
+            inner: platform::AudioCaptureServiceImpl::new(
+                config,
+                format,
+                output_path,
+                final_output_path,
+                temp_dir,
+            ),
+        }
+    }
+
+    pub fn start(&mut self) -> Result<(), String> {
+        self.inner.start()
+    }
+
+    pub fn finalize_and_mux_detached(mut self) {
+        std::thread::spawn(move || {
+            if let Err(err) = self.inner.finalize_and_mux() {
+                eprintln!("[audio] Error en mux de audio: {err}");
+            }
+        });
+    }
 }
 
 pub fn list_microphone_input_devices() -> Result<Vec<String>, String> {
-    Ok(Vec::new())
+    platform::list_microphone_input_devices()
 }
 
 pub fn update_live_audio_capture(
     capture_system_audio: bool,
     capture_microphone_audio: bool,
 ) -> Result<(), String> {
-    let mut status = live_audio_status()
-        .lock()
-        .map_err(|_| "No se pudo actualizar estado de audio".to_string())?;
-
-    status.capture_system_audio = capture_system_audio;
-    status.capture_microphone_audio = capture_microphone_audio;
-    Ok(())
+    platform::update_live_audio_capture(capture_system_audio, capture_microphone_audio)
 }
 
 pub fn apply_audio_capture_config(config: &AudioCaptureConfig) {
-    if let Ok(mut status) = live_audio_status().lock() {
-        status.capture_system_audio = config.capture_system_audio;
-        status.capture_microphone_audio = config.capture_microphone_audio;
-        status.system_audio_device_name = config.system_audio_device.clone();
-        status.microphone_audio_device_name = config.microphone_device.clone();
-    }
+    platform::apply_audio_capture_config(config);
 }
 
 pub fn get_live_audio_status() -> LiveAudioStatusSnapshot {
-    live_audio_status()
-        .lock()
-        .map(|status| status.clone())
-        .unwrap_or_default()
+    platform::get_live_audio_status()
 }
+
+#[cfg(windows)]
+#[path = "audio_capture/platform/windows.rs"]
+mod platform;
+
+#[cfg(not(windows))]
+#[path = "audio_capture/platform/stub.rs"]
+mod platform;

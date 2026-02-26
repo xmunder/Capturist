@@ -9,8 +9,12 @@ mod platform {
     };
 
     use crate::capture::models::RawFrame;
-    use crate::encoder::config::{EncoderConfig, QualityMode, VideoCodec, VideoEncoderPreference};
-    use crate::encoder::video_encoder_status::set_live_video_encoder_label;
+    use crate::encoder::{
+        audio_capture::AudioCaptureService,
+        config::{EncoderConfig, QualityMode, VideoCodec, VideoEncoderPreference},
+        output_paths::prepare_output_paths,
+        video_encoder_status::set_live_video_encoder_label,
+    };
 
     struct EncoderContext {
         output_ctx: format::context::Output,
@@ -27,19 +31,36 @@ mod platform {
     pub struct FfmpegEncoderConsumer {
         config: EncoderConfig,
         ctx: Option<EncoderContext>,
+        audio_capture: Option<AudioCaptureService>,
     }
 
     // FFmpeg mantiene estado interno no thread-safe; este consumer se usa con exclusión mutua.
     unsafe impl Send for FfmpegEncoderConsumer {}
 
     impl FfmpegEncoderConsumer {
-        pub fn new(config: EncoderConfig) -> Result<Self, String> {
+        pub fn new(mut config: EncoderConfig) -> Result<Self, String> {
             config.validate()?;
             ffmpeg_the_third::init()
                 .map_err(|err| format!("No se pudo inicializar FFmpeg: {err}"))?;
             set_live_video_encoder_label(None);
 
-            Ok(Self { config, ctx: None })
+            let final_output_path = config.output_path.clone();
+            let prepared_paths = prepare_output_paths(final_output_path.clone())?;
+            config.output_path = prepared_paths.temp_output_path.clone();
+
+            let audio_capture = AudioCaptureService::new(
+                config.audio.clone(),
+                config.format.clone(),
+                config.output_path.clone(),
+                final_output_path,
+                prepared_paths.temp_dir,
+            );
+
+            Ok(Self {
+                config,
+                ctx: None,
+                audio_capture: Some(audio_capture),
+            })
         }
 
         pub fn on_frame(&mut self, frame: RawFrame) -> Result<(), String> {
@@ -227,6 +248,11 @@ mod platform {
                 dst_frame,
             });
 
+            self.audio_capture
+                .as_mut()
+                .ok_or_else(|| "AudioCaptureService no disponible".to_string())?
+                .start()?;
+
             Ok(())
         }
 
@@ -378,6 +404,11 @@ mod platform {
             }
 
             self.ctx = None;
+
+            if let Some(audio_capture) = self.audio_capture.take() {
+                audio_capture.finalize_and_mux_detached();
+            }
+
             set_live_video_encoder_label(None);
 
             if let Some(err) = video_error {
