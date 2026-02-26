@@ -26,6 +26,7 @@ dist-ssr
 
 # Workspace local metadata
 AGENTS.md
+artifacts/
 
 # Optional FFmpeg artifacts not required for build/runtime
 ffmpeg-windows/bin/ffplay.exe
