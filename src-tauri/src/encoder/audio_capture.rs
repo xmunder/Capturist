@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 
-use crate::encoder::config::{AudioCaptureConfig, OutputFormat};
+use crate::encoder::config::{AudioCaptureConfig, OutputFormat, QualityMode};
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +23,7 @@ impl AudioCaptureService {
     pub fn new(
         config: AudioCaptureConfig,
         format: OutputFormat,
+        quality_mode: QualityMode,
         output_path: PathBuf,
         final_output_path: PathBuf,
         temp_dir: TempDir,
@@ -31,6 +32,7 @@ impl AudioCaptureService {
             inner: platform::AudioCaptureServiceImpl::new(
                 config,
                 format,
+                quality_mode,
                 output_path,
                 final_output_path,
                 temp_dir,
@@ -86,7 +88,7 @@ mod tests {
         get_live_audio_status, list_microphone_input_devices, update_live_audio_capture,
         AudioCaptureService,
     };
-    use crate::encoder::config::{AudioCaptureConfig, OutputFormat};
+    use crate::encoder::config::{AudioCaptureConfig, OutputFormat, QualityMode};
 
     #[test]
     fn lista_microfonos_stub_devuelve_vacia() {
@@ -124,6 +126,7 @@ mod tests {
                 ..AudioCaptureConfig::default()
             },
             OutputFormat::Mp4,
+            QualityMode::Balanced,
             output_path,
             final_path,
             temp_dir,
@@ -145,6 +148,7 @@ mod tests {
         let mut service = AudioCaptureService::new(
             AudioCaptureConfig::default(),
             OutputFormat::Mp4,
+            QualityMode::Balanced,
             output_path,
             final_path,
             temp_dir,

@@ -4,6 +4,8 @@ use crate::capture::models::{RawFrame, Region};
 
 pub type FrameArrivedCallback = Arc<dyn Fn(RawFrame) -> Result<(), String> + Send + Sync>;
 pub type SessionFinishedCallback = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+pub type ShouldAcceptFrameCallback = Arc<dyn Fn() -> Result<bool, String> + Send + Sync>;
+pub type FrameDroppedCallback = Arc<dyn Fn() + Send + Sync>;
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub struct RuntimeStartConfig {
@@ -11,6 +13,8 @@ pub struct RuntimeStartConfig {
     pub fps: u32,
     pub crop_region: Option<Region>,
     pub prefer_gpu_frames: bool,
+    pub should_accept_frame: ShouldAcceptFrameCallback,
+    pub on_frame_dropped: FrameDroppedCallback,
     pub on_frame_arrived: FrameArrivedCallback,
     pub on_session_finished: SessionFinishedCallback,
 }
@@ -53,7 +57,8 @@ mod platform {
     use crate::capture::{
         models::{RawFrame, Region},
         runtime::{
-            CaptureRuntimeHandle, FrameArrivedCallback, RuntimeStartConfig, SessionFinishedCallback,
+            CaptureRuntimeHandle, FrameArrivedCallback, FrameDroppedCallback, RuntimeStartConfig,
+            SessionFinishedCallback, ShouldAcceptFrameCallback,
         },
     };
 
@@ -71,6 +76,8 @@ mod platform {
             frame_counter: frame_counter.clone(),
             crop_region: config.crop_region,
             prefer_gpu_frames: config.prefer_gpu_frames,
+            should_accept_frame: config.should_accept_frame,
+            on_frame_dropped: config.on_frame_dropped,
             on_frame_arrived: config.on_frame_arrived,
         };
 
@@ -138,15 +145,6 @@ mod platform {
         let windows = Window::enumerate()
             .map_err(|err| format!("No se pudieron enumerar ventanas: {err}"))?;
         for window in windows {
-            let title = match window.title() {
-                Ok(value) => value.trim().to_string(),
-                Err(_) => continue,
-            };
-
-            if title.is_empty() {
-                continue;
-            }
-
             let stable_id = stable_target_id(window.as_raw_hwnd() as usize as u64, WINDOW_SALT);
             if stable_id == target_id {
                 return Ok(CaptureItem::Window(window));
@@ -175,6 +173,8 @@ mod platform {
         frame_counter: Arc<AtomicU64>,
         crop_region: Option<Region>,
         prefer_gpu_frames: bool,
+        should_accept_frame: ShouldAcceptFrameCallback,
+        on_frame_dropped: FrameDroppedCallback,
         on_frame_arrived: FrameArrivedCallback,
     }
 
@@ -202,6 +202,12 @@ mod platform {
             let frame_width = frame.width();
             let frame_height = frame.height();
             let timestamp_ms = frame_timestamp_ms(frame);
+            let should_accept_frame = (self.flags.should_accept_frame)()
+                .map_err(|err| format!("Error validando backpressure del encoder: {err}"))?;
+            if !should_accept_frame {
+                (self.flags.on_frame_dropped)();
+                return Ok(());
+            }
 
             let should_use_gpu_surface =
                 self.flags.prefer_gpu_frames && self.flags.crop_region.is_none();

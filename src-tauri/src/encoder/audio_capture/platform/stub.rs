@@ -7,7 +7,7 @@ use tempfile::TempDir;
 use crate::{
     encoder::audio_capture::LiveAudioStatusSnapshot,
     encoder::{
-        config::{AudioCaptureConfig, OutputFormat},
+        config::{AudioCaptureConfig, OutputFormat, QualityMode},
         output_paths::move_temp_to_final,
         processing_status::ProcessingGuard,
     },
@@ -16,6 +16,7 @@ use crate::{
 pub struct AudioCaptureServiceImpl {
     config: AudioCaptureConfig,
     _format: OutputFormat,
+    _quality_mode: QualityMode,
     output_path: PathBuf,
     final_output_path: PathBuf,
     _temp_dir: TempDir,
@@ -25,6 +26,7 @@ impl AudioCaptureServiceImpl {
     pub fn new(
         config: AudioCaptureConfig,
         format: OutputFormat,
+        quality_mode: QualityMode,
         output_path: PathBuf,
         final_output_path: PathBuf,
         temp_dir: TempDir,
@@ -32,6 +34,7 @@ impl AudioCaptureServiceImpl {
         Self {
             config,
             _format: format,
+            _quality_mode: quality_mode,
             output_path,
             final_output_path,
             _temp_dir: temp_dir,

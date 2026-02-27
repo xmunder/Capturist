@@ -76,6 +76,36 @@ fn should_exclude_window_process(process_name: &str) -> bool {
 }
 
 #[cfg(any(target_os = "windows", test))]
+fn format_process_window_label(process_name: &str) -> Option<String> {
+    let trimmed = process_name.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let normalized = trimmed
+        .strip_suffix(".exe")
+        .or_else(|| trimmed.strip_suffix(".EXE"))
+        .unwrap_or(trimmed)
+        .trim();
+
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(format!("{normalized} (sin título)"))
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn resolve_window_label(window_title: &str, process_name: Option<&str>) -> Option<String> {
+    let title = window_title.trim();
+    if !title.is_empty() {
+        return Some(title.to_string());
+    }
+
+    process_name.and_then(format_process_window_label)
+}
+
+#[cfg(any(target_os = "windows", test))]
 fn normalize_display_device_name(device_name: &str) -> String {
     device_name
         .trim()
@@ -137,14 +167,15 @@ mod platform {
     use crate::capture::{
         models::{CaptureTarget, TargetKind},
         provider::{
-            format_monitor_label, should_exclude_window_process, should_exclude_window_title,
-            sort_targets,
+            format_monitor_label, resolve_window_label, should_exclude_window_process,
+            should_exclude_window_title, sort_targets,
         },
     };
 
     const MONITOR_SALT: u64 = 0x045D_9F3B;
     const WINDOW_SALT: u64 = 0x27D4_EB2D;
     const MONITORINFOF_PRIMARY_FLAG: u32 = 0x0000_0001;
+    const MIN_WINDOW_EDGE_PX: u32 = 32;
 
     pub fn is_supported() -> bool {
         Monitor::enumerate()
@@ -198,17 +229,18 @@ mod platform {
             .map_err(|err| format!("No se pudieron enumerar ventanas: {err}"))?;
 
         for window in windows {
-            let title = match window.title() {
-                Ok(value) => value.trim().to_string(),
-                Err(_) => continue,
-            };
+            let raw_title = window.title().unwrap_or_default();
+            let title = raw_title.trim().to_string();
 
-            if title.is_empty() {
+            if !title.is_empty() && should_exclude_window_title(&title) {
                 continue;
             }
 
-            if should_exclude_window_title(&title) {
-                continue;
+            let process_name = window.process_name().ok();
+            if let Some(process_name) = process_name.as_deref() {
+                if should_exclude_window_process(process_name) {
+                    continue;
+                }
             }
 
             let rect = match window.rect() {
@@ -218,7 +250,7 @@ mod platform {
 
             let width = (rect.right - rect.left).max(1) as u32;
             let height = (rect.bottom - rect.top).max(1) as u32;
-            if width < 64 || height < 64 {
+            if width < MIN_WINDOW_EDGE_PX || height < MIN_WINDOW_EDGE_PX {
                 continue;
             }
 
@@ -227,19 +259,13 @@ mod platform {
                 continue;
             }
 
-            if window.monitor().is_none() {
+            let Some(window_name) = resolve_window_label(&title, process_name.as_deref()) else {
                 continue;
-            }
-
-            if let Ok(process_name) = window.process_name() {
-                if should_exclude_window_process(&process_name) {
-                    continue;
-                }
-            }
+            };
 
             targets.push(CaptureTarget {
                 id: stable_target_id(window.as_raw_hwnd() as usize as u64, WINDOW_SALT),
-                name: title,
+                name: window_name,
                 width,
                 height,
                 origin_x: rect.left,
@@ -342,8 +368,9 @@ mod platform {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_monitor_label, normalize_display_device_name, should_exclude_window_process,
-        should_exclude_window_title, sort_targets,
+        format_monitor_label, format_process_window_label, normalize_display_device_name,
+        resolve_window_label, should_exclude_window_process, should_exclude_window_title,
+        sort_targets,
     };
     use crate::capture::models::{CaptureTarget, TargetKind};
 
@@ -422,5 +449,21 @@ mod tests {
         let label = format_monitor_label("Generic Monitor", Some(r"\\.\DISPLAY1"), true);
         assert!(label.contains("Principal"));
         assert!(label.contains("DISPLAY1"));
+    }
+
+    #[test]
+    fn etiqueta_ventana_con_titulo_usa_titulo() {
+        let label = resolve_window_label("Visual Studio Code", Some("Code.exe"));
+        assert_eq!(label.as_deref(), Some("Visual Studio Code"));
+    }
+
+    #[test]
+    fn etiqueta_ventana_sin_titulo_usa_nombre_proceso() {
+        let label = resolve_window_label("", Some("obs64.exe"));
+        assert_eq!(label.as_deref(), Some("obs64 (sin título)"));
+        assert_eq!(
+            format_process_window_label("MyGame.EXE").as_deref(),
+            Some("MyGame (sin título)")
+        );
     }
 }

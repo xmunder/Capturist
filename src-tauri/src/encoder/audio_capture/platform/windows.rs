@@ -12,7 +12,7 @@ use windows::Win32::Media::Audio::{eCapture, eRender, EDataFlow};
 
 use crate::encoder::{
     audio_capture::LiveAudioStatusSnapshot,
-    config::{AudioCaptureConfig, OutputFormat},
+    config::{AudioCaptureConfig, OutputFormat, QualityMode},
     output_paths::move_temp_to_final,
     processing_status::ProcessingGuard,
 };
@@ -53,6 +53,7 @@ pub(super) struct AudioTrackInput {
 pub struct AudioCaptureServiceImpl {
     config: AudioCaptureConfig,
     format: OutputFormat,
+    quality_mode: QualityMode,
     output_path: PathBuf,
     final_output_path: PathBuf,
     temp_dir: Option<TempDir>,
@@ -76,6 +77,7 @@ impl AudioCaptureServiceImpl {
     pub fn new(
         config: AudioCaptureConfig,
         format: OutputFormat,
+        quality_mode: QualityMode,
         output_path: PathBuf,
         final_output_path: PathBuf,
         temp_dir: TempDir,
@@ -83,6 +85,7 @@ impl AudioCaptureServiceImpl {
         Self {
             config,
             format,
+            quality_mode,
             output_path,
             final_output_path,
             temp_dir: Some(temp_dir),
@@ -235,6 +238,7 @@ impl AudioCaptureServiceImpl {
             }
             mux_audio_into_video(
                 &self.format,
+                &self.quality_mode,
                 &self.output_path,
                 &self.final_output_path,
                 &audio_tracks,

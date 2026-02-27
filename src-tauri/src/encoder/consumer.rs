@@ -69,6 +69,7 @@ mod platform {
             let audio_capture = AudioCaptureService::new(
                 config.audio.clone(),
                 config.format.clone(),
+                config.quality_mode.clone(),
                 config.output_path.clone(),
                 final_output_path,
                 prepared_paths.temp_dir,
@@ -157,7 +158,8 @@ mod platform {
                     continue;
                 };
 
-                let (encoder_opts, has_custom_opts) = self.build_encoder_options(name, &codec_kind);
+                let (encoder_opts, has_custom_opts) =
+                    self.build_encoder_options(name, &codec_kind, out_w, out_h);
 
                 let mut open_attempt =
                     |opts: Dictionary| -> Result<encoder::Video, ffmpeg_the_third::Error> {
@@ -309,29 +311,71 @@ mod platform {
             &self,
             encoder_name: &str,
             codec: &VideoCodec,
+            out_w: u32,
+            out_h: u32,
         ) -> (Dictionary<'_>, bool) {
             let mut options = Dictionary::new();
             let mut has_options = false;
+            let gop = recommended_gop_frames(self.config.fps);
+            let target_kbps = estimate_target_bitrate_kbps(
+                out_w,
+                out_h,
+                self.config.fps,
+                codec,
+                &self.config.quality_mode,
+            );
+            let maxrate_kbps = target_kbps.saturating_mul(match self.config.quality_mode {
+                QualityMode::Performance => 100,
+                QualityMode::Balanced => 125,
+                QualityMode::Quality => 140,
+            }) / 100;
+            let bufsize_kbps = target_kbps.saturating_mul(match self.config.quality_mode {
+                QualityMode::Performance => 50,
+                QualityMode::Balanced => 100,
+                QualityMode::Quality => 130,
+            }) / 100;
 
             match codec {
                 VideoCodec::H264 | VideoCodec::H265 => {
                     if encoder_name.contains("nvenc") {
                         let preset = match self.config.quality_mode {
-                            QualityMode::Performance => "p4",
+                            QualityMode::Performance => "p3",
                             QualityMode::Balanced => "p5",
                             QualityMode::Quality => "p6",
                         };
 
                         let nvenc_cq = match self.config.quality_mode {
-                            QualityMode::Performance => self.config.crf.saturating_add(4).min(35),
+                            QualityMode::Performance => self.config.crf.saturating_add(5).min(36),
                             QualityMode::Balanced => self.config.crf.min(32),
                             QualityMode::Quality => self.config.crf.saturating_sub(2).max(14),
                         };
+                        let tune = match self.config.quality_mode {
+                            QualityMode::Performance => "ull",
+                            QualityMode::Balanced => "ll",
+                            QualityMode::Quality => "hq",
+                        };
+                        let use_cbr = matches!(self.config.quality_mode, QualityMode::Performance);
 
                         options.set("preset", preset);
-                        options.set("rc", "vbr");
-                        options.set("cq", &nvenc_cq.to_string());
-                        options.set("b:v", "0");
+                        options.set("rc", if use_cbr { "cbr" } else { "vbr" });
+                        if !use_cbr {
+                            options.set("cq", &nvenc_cq.to_string());
+                        }
+                        options.set("b:v", &format!("{target_kbps}k"));
+                        options.set("maxrate", &format!("{maxrate_kbps}k"));
+                        options.set("bufsize", &format!("{bufsize_kbps}k"));
+                        options.set("g", &gop.to_string());
+                        options.set("bf", "0");
+                        options.set("rc-lookahead", "0");
+                        options.set("tune", tune);
+                        if matches!(self.config.quality_mode, QualityMode::Quality) {
+                            options.set("spatial_aq", "1");
+                            options.set("temporal_aq", "1");
+                            options.set("aq-strength", "8");
+                        } else {
+                            options.set("spatial_aq", "0");
+                            options.set("temporal_aq", "0");
+                        }
                         has_options = true;
                     }
 
@@ -348,7 +392,19 @@ mod platform {
                             QualityMode::Balanced => "balanced",
                             QualityMode::Quality => "quality",
                         };
+                        let usage = match self.config.quality_mode {
+                            QualityMode::Performance => "ultralowlatency",
+                            QualityMode::Balanced => "lowlatency",
+                            QualityMode::Quality => "transcoding",
+                        };
                         options.set("quality", quality);
+                        options.set("usage", usage);
+                        options.set("rc", "cbr");
+                        options.set("b:v", &format!("{target_kbps}k"));
+                        options.set("maxrate", &format!("{maxrate_kbps}k"));
+                        options.set("bufsize", &format!("{bufsize_kbps}k"));
+                        options.set("g", &gop.to_string());
+                        options.set("bf", "0");
                         has_options = true;
                     }
 
@@ -356,10 +412,16 @@ mod platform {
                         && matches!(self.config.quality_mode, QualityMode::Performance)
                     {
                         options.set("low_power", "1");
+                        options.set("bf", "0");
+                        options.set("async_depth", "1");
+                        options.set("g", &gop.to_string());
                         has_options = true;
                     } else if encoder_name.contains("_qsv") {
                         let qsv_quality = self.config.crf.min(40);
                         options.set("global_quality", &qsv_quality.to_string());
+                        options.set("bf", "0");
+                        options.set("async_depth", "1");
+                        options.set("g", &gop.to_string());
                         has_options = true;
                     }
                 }
@@ -668,6 +730,35 @@ mod platform {
         }
 
         let _ = ID3D11Texture2D::from_raw(opaque as *mut _);
+    }
+
+    fn recommended_gop_frames(fps: u32) -> u32 {
+        let safe_fps = fps.clamp(1, 240);
+        safe_fps.saturating_mul(2).clamp(30, 300)
+    }
+
+    fn estimate_target_bitrate_kbps(
+        width: u32,
+        height: u32,
+        fps: u32,
+        codec: &VideoCodec,
+        quality_mode: &QualityMode,
+    ) -> u32 {
+        let bpp = match quality_mode {
+            QualityMode::Performance => 0.055_f64,
+            QualityMode::Balanced => 0.075_f64,
+            QualityMode::Quality => 0.1_f64,
+        };
+        let codec_factor = match codec {
+            VideoCodec::H264 => 1.0_f64,
+            VideoCodec::H265 => 0.72_f64,
+            VideoCodec::Vp9 => 0.68_f64,
+        };
+
+        let pixels_per_sec = f64::from(width) * f64::from(height) * f64::from(fps.clamp(1, 240));
+        let estimated_kbps = (pixels_per_sec * bpp * codec_factor / 1_000.0).round();
+        let clamped = estimated_kbps.clamp(2_500.0, 80_000.0);
+        clamped as u32
     }
 
     fn selected_backend_label(encoder_name: &str) -> &'static str {

@@ -121,6 +121,18 @@ Detalle y checklist:
 - En Linux/WSL el comando `set_global_shortcuts` devuelve error esperado de plataforma.
 - El path de ingestión D3D11 directo a encoder es experimental y está deshabilitado por defecto.
   Si quieres habilitarlo manualmente: `CAPTURIST_EXPERIMENTAL_D3D11_INPUT=1`.
+- El mux de audio/video prioriza cierre rápido:
+  - `qualityMode=performance`: filtros mínimos de audio.
+  - `qualityMode=balanced`: limpieza ligera.
+  - `qualityMode=quality`: cadena completa (incluye reducción de ruido de micrófono).
+- En encoder por hardware se aplica perfil de baja latencia por modo:
+  - `performance`: CBR + GOP corto + sin lookahead/B-frames.
+  - `balanced`: VBR controlado + sin lookahead/B-frames.
+  - `quality`: AQ activado y bitrate más alto manteniendo baja latencia.
+- En MP4, `+faststart` queda desactivado por defecto para acelerar finalización.
+  Si quieres habilitarlo: `CAPTURIST_MP4_FASTSTART=1`.
+- Si detectas audio adelantado respecto al video tras el mux, puedes compensar con:
+  `CAPTURIST_AUDIO_SYNC_OFFSET_MS=120` (rango recomendado: 40-200ms).
 
 ## Pendientes de cierre
 

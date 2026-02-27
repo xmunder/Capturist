@@ -1,6 +1,6 @@
 use std::{
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, SyncSender, TrySendError},
         Arc, Mutex,
     },
@@ -146,8 +146,10 @@ impl CaptureManager {
                     fps,
                     crop_region,
                     prefer_gpu_frames,
-                    on_frame_arrived: frame_callbacks.0,
-                    on_session_finished: frame_callbacks.1,
+                    should_accept_frame: frame_callbacks.0,
+                    on_frame_dropped: frame_callbacks.1,
+                    on_frame_arrived: frame_callbacks.2,
+                    on_session_finished: frame_callbacks.3,
                 })
             }),
         )
@@ -415,20 +417,33 @@ struct AsyncVideoPipeline {
     sender: SyncSender<VideoWorkerMessage>,
     worker: Mutex<Option<JoinHandle<()>>>,
     worker_error: Arc<Mutex<Option<String>>>,
+    queued_frames: Arc<AtomicUsize>,
     dropped_frames: AtomicU64,
 }
 
 fn build_runtime_callbacks(
     encoder_config: EncoderConfig,
-) -> Result<(FrameArrivedCallback, SessionFinishedCallback), String> {
+) -> Result<
+    (
+        runtime::ShouldAcceptFrameCallback,
+        runtime::FrameDroppedCallback,
+        FrameArrivedCallback,
+        SessionFinishedCallback,
+    ),
+    String,
+> {
     let (sender, receiver) =
         mpsc::sync_channel::<VideoWorkerMessage>(VIDEO_PIPELINE_QUEUE_CAPACITY);
     let worker_error = Arc::new(Mutex::new(None::<String>));
     let worker_error_for_thread = Arc::clone(&worker_error);
+    let queued_frames = Arc::new(AtomicUsize::new(0));
+    let queued_frames_for_thread = Arc::clone(&queued_frames);
 
     let worker = thread::Builder::new()
         .name("video-encoder-worker".to_string())
         .spawn(move || {
+            configure_video_worker_thread();
+
             let mut consumer = match FfmpegEncoderConsumer::new(encoder_config) {
                 Ok(consumer) => consumer,
                 Err(err) => {
@@ -440,6 +455,7 @@ fn build_runtime_callbacks(
             while let Ok(message) = receiver.recv() {
                 match message {
                     VideoWorkerMessage::Frame(raw_frame) => {
+                        decrement_queued_frames(&queued_frames_for_thread);
                         if let Err(err) = consumer.on_frame(raw_frame) {
                             set_worker_error(
                                 &worker_error_for_thread,
@@ -465,8 +481,28 @@ fn build_runtime_callbacks(
         sender,
         worker: Mutex::new(Some(worker)),
         worker_error,
+        queued_frames,
         dropped_frames: AtomicU64::new(0),
     });
+
+    let should_accept_frame: runtime::ShouldAcceptFrameCallback = {
+        let pipeline = Arc::clone(&pipeline);
+        Arc::new(move || {
+            if let Some(err) = read_worker_error(&pipeline.worker_error)? {
+                return Err(err);
+            }
+
+            let queued = pipeline.queued_frames.load(Ordering::Acquire);
+            Ok(queued < VIDEO_PIPELINE_QUEUE_CAPACITY)
+        })
+    };
+
+    let on_frame_dropped: runtime::FrameDroppedCallback = {
+        let pipeline = Arc::clone(&pipeline);
+        Arc::new(move || {
+            pipeline.dropped_frames.fetch_add(1, Ordering::Relaxed);
+        })
+    };
 
     let frame_callback: FrameArrivedCallback = {
         let pipeline = Arc::clone(&pipeline);
@@ -475,17 +511,20 @@ fn build_runtime_callbacks(
                 return Err(err);
             }
 
+            pipeline.queued_frames.fetch_add(1, Ordering::AcqRel);
             match pipeline
                 .sender
                 .try_send(VideoWorkerMessage::Frame(raw_frame))
             {
                 Ok(()) => Ok(()),
                 Err(TrySendError::Full(_)) => {
+                    decrement_queued_frames(&pipeline.queued_frames);
                     // Mantiene la captura fluida cuando el encoder va atrasado.
                     pipeline.dropped_frames.fetch_add(1, Ordering::Relaxed);
                     Ok(())
                 }
                 Err(TrySendError::Disconnected(_)) => {
+                    decrement_queued_frames(&pipeline.queued_frames);
                     if let Some(err) = read_worker_error(&pipeline.worker_error)? {
                         return Err(err);
                     }
@@ -532,7 +571,32 @@ fn build_runtime_callbacks(
         })
     };
 
-    Ok((frame_callback, session_finished_callback))
+    Ok((
+        should_accept_frame,
+        on_frame_dropped,
+        frame_callback,
+        session_finished_callback,
+    ))
+}
+
+#[cfg(target_os = "windows")]
+fn configure_video_worker_thread() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+
+    unsafe {
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn configure_video_worker_thread() {}
+
+fn decrement_queued_frames(counter: &AtomicUsize) {
+    let _ = counter.fetch_update(Ordering::AcqRel, Ordering::Acquire, |value| {
+        Some(value.saturating_sub(1))
+    });
 }
 
 fn read_worker_error(error_slot: &Arc<Mutex<Option<String>>>) -> Result<Option<String>, String> {
