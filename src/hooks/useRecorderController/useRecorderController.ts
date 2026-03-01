@@ -21,7 +21,6 @@ import type {
   VideoEncoderCapabilities,
   VideoEncoderPreference,
 } from "../../recorder/types";
-import { normalizeRegionFromNativeSelection } from "../../region/normalize";
 import {
   DEFAULT_SHORTCUTS,
   GLOBAL_SHORTCUT_TRIGGERED_EVENT,
@@ -892,26 +891,14 @@ export function useRecorderController() {
         console.warn("[window] no se pudo minimizar antes de seleccionar region", minimizeErr);
       }
 
-      const region = await Grabador.selectRegionNative();
+      const region = await Grabador.selectRegionNative(activeTarget);
       debugRegion("selectRegionNative result", region);
 
       if (!region) {
         return;
       }
 
-      const normalized = normalizeRegionFromNativeSelection(region, activeTarget);
-      debugRegion("selectRegionNative normalized", {
-        selectedAbsolute: region,
-        targetOrigin: { x: activeTarget.originX, y: activeTarget.originY },
-        targetCaptureSize: { width: activeTarget.width, height: activeTarget.height },
-        targetScreenSize: {
-          width: activeTarget.screenWidth,
-          height: activeTarget.screenHeight,
-        },
-        normalized,
-      });
-
-      setCropRegion(normalized);
+      setCropRegion(region);
       setCropEnabled(true);
     } catch (err) {
       const message = String(err);

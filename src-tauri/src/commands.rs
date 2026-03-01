@@ -40,8 +40,73 @@ fn lock_capture<'a>(
 }
 
 #[tauri::command]
-pub fn select_region_native() -> Result<Option<Region>, String> {
-    region::select_region()
+pub fn select_region_native(target: Option<CaptureTarget>) -> Result<Option<Region>, String> {
+    let Some(target) = target else {
+        return region::select_region();
+    };
+
+    let bounds = region::SelectionBounds {
+        origin_x: target.origin_x,
+        origin_y: target.origin_y,
+        width: target.screen_width,
+        height: target.screen_height,
+    };
+
+    let Some(selected_region) = region::select_region_with_bounds(bounds)? else {
+        return Ok(None);
+    };
+
+    normalize_native_region_for_target(selected_region, &target).map(Some)
+}
+
+fn normalize_native_region_for_target(
+    selected_region: Region,
+    target: &CaptureTarget,
+) -> Result<Region, String> {
+    if target.width == 0
+        || target.height == 0
+        || target.screen_width == 0
+        || target.screen_height == 0
+    {
+        return Err("El target de captura tiene dimensiones invalidas".to_string());
+    }
+
+    if selected_region.width == 0 || selected_region.height == 0 {
+        return Err("La region seleccionada no tiene un area valida".to_string());
+    }
+
+    let source_start_x = selected_region.x.min(target.screen_width.saturating_sub(1));
+    let source_start_y = selected_region
+        .y
+        .min(target.screen_height.saturating_sub(1));
+    let source_end_x = selected_region
+        .x
+        .saturating_add(selected_region.width)
+        .clamp(source_start_x.saturating_add(1), target.screen_width);
+    let source_end_y = selected_region
+        .y
+        .saturating_add(selected_region.height)
+        .clamp(source_start_y.saturating_add(1), target.screen_height);
+
+    let mapped_start_x =
+        scale_coordinate(source_start_x, target.screen_width, target.width).min(target.width - 1);
+    let mapped_start_y = scale_coordinate(source_start_y, target.screen_height, target.height)
+        .min(target.height - 1);
+    let mapped_end_x = scale_coordinate(source_end_x, target.screen_width, target.width)
+        .clamp(mapped_start_x.saturating_add(1), target.width);
+    let mapped_end_y = scale_coordinate(source_end_y, target.screen_height, target.height)
+        .clamp(mapped_start_y.saturating_add(1), target.height);
+
+    Ok(Region {
+        x: mapped_start_x,
+        y: mapped_start_y,
+        width: mapped_end_x.saturating_sub(mapped_start_x),
+        height: mapped_end_y.saturating_sub(mapped_start_y),
+    })
+}
+
+fn scale_coordinate(value: u32, source_extent: u32, target_extent: u32) -> u32 {
+    ((value as f64 * target_extent as f64) / source_extent as f64).round() as u32
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -194,6 +259,86 @@ pub fn set_global_shortcuts(
         .ok_or_else(|| "Gestor de atajos globales no inicializado".to_string())?;
 
     manager.update(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_native_region_for_target;
+    use crate::capture::models::{CaptureTarget, Region, TargetKind};
+
+    fn monitor_target(
+        width: u32,
+        height: u32,
+        screen_width: u32,
+        screen_height: u32,
+    ) -> CaptureTarget {
+        CaptureTarget {
+            id: 1,
+            name: "Monitor".to_string(),
+            width,
+            height,
+            origin_x: 0,
+            origin_y: 0,
+            screen_width,
+            screen_height,
+            is_primary: true,
+            kind: TargetKind::Monitor,
+        }
+    }
+
+    #[test]
+    fn normaliza_region_de_monitor_con_escala_dpi() {
+        let target = monitor_target(3840, 2160, 1920, 1080);
+        let selected_region = Region {
+            x: 120,
+            y: 45,
+            width: 600,
+            height: 300,
+        };
+
+        let normalized = normalize_native_region_for_target(selected_region, &target)
+            .expect("la region debe normalizarse");
+
+        assert_eq!(normalized.x, 240);
+        assert_eq!(normalized.y, 90);
+        assert_eq!(normalized.width, 1200);
+        assert_eq!(normalized.height, 600);
+    }
+
+    #[test]
+    fn recorta_la_region_al_borde_del_target() {
+        let target = monitor_target(1920, 1080, 1920, 1080);
+        let selected_region = Region {
+            x: 1910,
+            y: 1075,
+            width: 80,
+            height: 40,
+        };
+
+        let normalized = normalize_native_region_for_target(selected_region, &target)
+            .expect("la region debe ajustarse al borde");
+
+        assert_eq!(normalized.x, 1910);
+        assert_eq!(normalized.y, 1075);
+        assert_eq!(normalized.width, 10);
+        assert_eq!(normalized.height, 5);
+    }
+
+    #[test]
+    fn rechaza_target_con_dimensiones_invalidas() {
+        let target = monitor_target(1920, 1080, 0, 1080);
+        let selected_region = Region {
+            x: 0,
+            y: 0,
+            width: 10,
+            height: 10,
+        };
+
+        let err = normalize_native_region_for_target(selected_region, &target)
+            .expect_err("debe fallar cuando el target es invalido");
+
+        assert!(err.contains("dimensiones invalidas"));
+    }
 }
 
 #[tauri::command]

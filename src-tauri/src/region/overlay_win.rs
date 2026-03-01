@@ -20,7 +20,7 @@ mod win {
         WS_EX_TOPMOST, WS_POPUP,
     };
 
-    use crate::capture::models::Region;
+    use crate::{capture::models::Region, region::SelectionBounds};
 
     const MIN_SELECTION_EDGE_PX: i32 = 5;
     const OVERLAY_DIM_ALPHA: u8 = 120;
@@ -59,6 +59,26 @@ mod win {
 
     fn has_area(rect: &RECT) -> bool {
         rect.right > rect.left && rect.bottom > rect.top
+    }
+
+    fn point_from_lparam(l: LPARAM) -> POINT {
+        POINT {
+            x: (l.0 & 0xFFFF) as i16 as i32,
+            y: ((l.0 >> 16) & 0xFFFF) as i16 as i32,
+        }
+    }
+
+    unsafe fn clamp_point_to_client(hwnd: HWND, point: POINT) -> POINT {
+        let mut client_rect = RECT::default();
+        let _ = GetClientRect(hwnd, &mut client_rect);
+
+        let max_x = (client_rect.right - 1).max(0);
+        let max_y = (client_rect.bottom - 1).max(0);
+
+        POINT {
+            x: point.x.clamp(0, max_x),
+            y: point.y.clamp(0, max_y),
+        }
     }
 
     fn same_rect(a: &RECT, b: &RECT) -> bool {
@@ -162,10 +182,10 @@ mod win {
     unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
         match msg {
             WM_LBUTTONDOWN => {
+                let point = clamp_point_to_client(hwnd, point_from_lparam(l));
                 let mut s = state().lock().expect("estado overlay poisoned");
                 s.selecting = true;
-                s.start.x = (l.0 & 0xFFFF) as i16 as i32;
-                s.start.y = ((l.0 >> 16) & 0xFFFF) as i16 as i32;
+                s.start = point;
                 s.current = s.start;
                 update_rect(&mut s);
                 windows_sys::Win32::UI::Input::KeyboardAndMouse::SetCapture(hwnd.0);
@@ -173,13 +193,13 @@ mod win {
                 LRESULT(0)
             }
             WM_MOUSEMOVE => {
+                let point = clamp_point_to_client(hwnd, point_from_lparam(l));
                 let mut dirty_old = None;
                 let mut dirty_new = None;
                 {
                     let mut s = state().lock().expect("estado overlay poisoned");
                     if s.selecting {
-                        s.current.x = (l.0 & 0xFFFF) as i16 as i32;
-                        s.current.y = ((l.0 >> 16) & 0xFFFF) as i16 as i32;
+                        s.current = point;
                         let old_rect = s.rect;
                         update_rect(&mut s);
                         if same_rect(&old_rect, &s.rect) {
@@ -199,10 +219,12 @@ mod win {
                 LRESULT(0)
             }
             WM_LBUTTONUP => {
+                let point = clamp_point_to_client(hwnd, point_from_lparam(l));
                 let mut s = state().lock().expect("estado overlay poisoned");
                 if s.selecting {
                     s.selecting = false;
                     s.done = true;
+                    s.current = point;
                     update_rect(&mut s);
                     windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture();
 
@@ -235,8 +257,21 @@ mod win {
         }
     }
 
-    pub fn select_region() -> Result<Option<Region>, String> {
+    fn select_region_internal(
+        bounds: SelectionBounds,
+        return_absolute_coordinates: bool,
+    ) -> Result<Option<Region>, String> {
         unsafe {
+            let overlay_width = i32::try_from(bounds.width).map_err(|_| {
+                "El ancho del area seleccionable excede el limite soportado".to_string()
+            })?;
+            let overlay_height = i32::try_from(bounds.height).map_err(|_| {
+                "El alto del area seleccionable excede el limite soportado".to_string()
+            })?;
+            if overlay_width <= 0 || overlay_height <= 0 {
+                return Err("El area seleccionable debe tener dimensiones validas".to_string());
+            }
+
             {
                 let mut s = state().lock().expect("estado overlay poisoned");
                 *s = State::default();
@@ -253,20 +288,15 @@ mod win {
 
             RegisterClassW(&wc);
 
-            let x = GetSystemMetrics(SM_XVIRTUALSCREEN);
-            let y = GetSystemMetrics(SM_YVIRTUALSCREEN);
-            let w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-            let h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-
             let hwnd = CreateWindowExW(
                 WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
                 PCWSTR(class_name.as_ptr()),
                 PCWSTR(class_name.as_ptr()),
                 WS_POPUP,
-                x,
-                y,
-                w,
-                h,
+                bounds.origin_x,
+                bounds.origin_y,
+                overlay_width,
+                overlay_height,
                 Some(HWND(ptr::null_mut())),
                 Some(HMENU(ptr::null_mut())),
                 None,
@@ -318,14 +348,37 @@ mod win {
             let width = (rect.right - rect.left).max(1) as u32;
             let height = (rect.bottom - rect.top).max(1) as u32;
             let region = Region {
-                x: (x + rect.left).max(0) as u32,
-                y: (y + rect.top).max(0) as u32,
+                x: if return_absolute_coordinates {
+                    (bounds.origin_x + rect.left).max(0) as u32
+                } else {
+                    rect.left.max(0) as u32
+                },
+                y: if return_absolute_coordinates {
+                    (bounds.origin_y + rect.top).max(0) as u32
+                } else {
+                    rect.top.max(0) as u32
+                },
                 width,
                 height,
             };
 
             Ok(Some(region))
         }
+    }
+
+    pub fn select_region() -> Result<Option<Region>, String> {
+        let bounds = SelectionBounds {
+            origin_x: unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) },
+            origin_y: unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) },
+            width: unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN).max(1) as u32 },
+            height: unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN).max(1) as u32 },
+        };
+
+        select_region_internal(bounds, true)
+    }
+
+    pub fn select_region_with_bounds(bounds: SelectionBounds) -> Result<Option<Region>, String> {
+        select_region_internal(bounds, false)
     }
 }
 
@@ -334,7 +387,21 @@ pub fn select_region() -> Result<Option<crate::capture::models::Region>, String>
     win::select_region()
 }
 
+#[cfg(target_os = "windows")]
+pub fn select_region_with_bounds(
+    bounds: crate::region::SelectionBounds,
+) -> Result<Option<crate::capture::models::Region>, String> {
+    win::select_region_with_bounds(bounds)
+}
+
 #[cfg(not(target_os = "windows"))]
 pub fn select_region() -> Result<Option<crate::capture::models::Region>, String> {
+    Err("Overlay solo disponible en Windows".to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn select_region_with_bounds(
+    _bounds: crate::region::SelectionBounds,
+) -> Result<Option<crate::capture::models::Region>, String> {
     Err("Overlay solo disponible en Windows".to_string())
 }

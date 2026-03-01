@@ -63,8 +63,10 @@ export class Grabador {
     return invoke("get_recording_audio_status");
   }
 
-  static async selectRegionNative(): Promise<import("./types").CropRegion | null> {
-    return invoke("select_region_native");
+  static async selectRegionNative(
+    target: CaptureTarget | null,
+  ): Promise<import("./types").CropRegion | null> {
+    return invoke("select_region_native", { target });
   }
 
   static async defaultOutputPath(format: OutputFormat) {
